@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pytracksim"
-version = "0.0.1-alpha"
+version = "0.0.1-alpha3"
 authors = [
   { name="Nicolai Weinreich", email="nawe@energy.aau.dk" },
 ]
@@ -17,9 +17,11 @@ classifiers = [
 ]
 dependencies = [
 "libsumo >= 1.20",
-"pandas > 2.0",
-"numpy" > 1.0",
-"tqdm > 4.0"]
+"pandas",
+"numpy",
+"tqdm"
+]
+
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
