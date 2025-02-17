@@ -15,6 +15,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+"libsumo >= 1.20",
+"pandas > 2.0",
+"numpy" > 1.0",
+"tqdm > 4.0"]
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
