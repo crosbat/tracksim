@@ -69,7 +69,9 @@ class Traffic():
             Can be set as a number between 0 and 1 which gives the ratio of trips 
             to process in the end, e.g. if 'lite_mode_ratio' is 0.1, only 10%
             of the trips are processed. The trips to process are randomnly 
-            selected. If None, then all trips are processed. NOTE: all trips 
+            selected. If None, then all trips are processed, If 0, then no trips
+            are processed and will have to processed manually by the user by 
+            calling the 'process_simulation_data' method. NOTE: all trips 
             still need to be simulated, this variable only affects the processing
             of the simulated trips after simulation. The default is None.
         lite_mode_seed : int, optional
@@ -104,8 +106,8 @@ class Traffic():
             self.lite_mode_ratio = None
         
         if self.lite_mode_ratio is not None:
-            if (self.lite_mode_ratio > 1) or (self.lite_mode_ratio <= 0):
-                raise ValueError("Please provide 'lite_mode_ratio' as a number between 0 (exclusive) and 1 (inclusive)")
+            if (self.lite_mode_ratio > 1) or (self.lite_mode_ratio < 0):
+                raise ValueError("Please provide 'lite_mode_ratio' as a number between 0 (inclusive) and 1 (inclusive)")
         
         self.lite_mode_seed = lite_mode_seed
         self.remove_split_trip_files = remove_split_trip_files
@@ -330,20 +332,21 @@ class Traffic():
         
         print(f'\n Finished simulation in {time.time()-time_start:.2f} seconds!')
         
-        self.process_simulation_data()
+        if self.lite_mode_ratio != 0: 
+            self.process_simulation_data()
         
-        if self.remove_split_trip_files:
-            
-            print("\nRemoving 'simulated_trips_split'")
-            
-            dir_length = len((folder:=os.listdir('simulated_trips_split')))
-            pbar = tqdm(total=dir_length, position=0, leave=True)
-            if dir_length != 0:
-                for file in folder:
-                    os.remove(f'simulated_trips_split/{file}')
-                    pbar.update()
-            
-            os.rmdir('simulated_trips_split')
+            if self.remove_split_trip_files:
+                
+                print("\nRemoving 'simulated_trips_split'")
+                
+                dir_length = len((folder:=os.listdir('simulated_trips_split')))
+                pbar = tqdm(total=dir_length, position=0, leave=True)
+                if dir_length != 0:
+                    for file in folder:
+                        os.remove(f'simulated_trips_split/{file}')
+                        pbar.update()
+                
+                os.rmdir('simulated_trips_split')
         
         return None
 
