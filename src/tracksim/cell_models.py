@@ -1,4 +1,7 @@
 import numpy as np
+import os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
 
 GenericCell = {'Model Name' : None,
                'Reference' : None,
@@ -24,7 +27,7 @@ GenericCell = {'Model Name' : None,
                 'OCV' : None,
                 'Tab Resistance [Ohm]' : None}
 
-Zheng2024_OCV = np.load('battery_data/Zheng2024_OCV.npy')
+Zheng2024_OCV = np.load(f'{current_dir}/battery_data/Zheng2024_OCV.npy')
 Zheng2024Cell = {'Model Name' : 'Zheng2024Cell',
                  'Reference' : 'Y. Zheng, Y. Che, X. Hu, X. Sui, and R. Teodorescu, “Online Sensorless Temperature Estimation of Lithium-Ion Batteries Through Electro-Thermal Coupling,” IEEE/ASME Transactions on Mechatronics, vol. 29, no. 6, pp. 4156–4167, Dec. 2024, doi: 10.1109/TMECH.2024.3367291.',
                  'Cell Model No.' : 'CALB L148N50B',
