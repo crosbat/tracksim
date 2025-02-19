@@ -710,7 +710,7 @@ class Pack():
                 for l in range(num_rc_pairs):
                   r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1}']
                   c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1}']
-                  rc[l,:,:] = np.exp(-time_delta/np.abs(r[i,:,:]*c[i,:,:]))
+                  rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
         
         
         
