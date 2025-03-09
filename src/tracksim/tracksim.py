@@ -145,7 +145,7 @@ class Traffic():
             if (self.lite_mode_ratio > 1) or (self.lite_mode_ratio < 0):
                 raise ValueError("Please provide 'lite_mode_ratio' as a number between 0 (inclusive) and 1 (inclusive)")
         
-        if (self.lite_mode_ratio is None) and (self.random_state == 'off'):
+        if (self.lite_mode_ratio is None) and (random_state == 'off'):
             # We need randomness to shuffle the trips
             self.random_state = None
         
