@@ -530,7 +530,7 @@ class Pack():
         self.initial_conditions = None
         self.simulation_results = None
         self.identical_cells = False
-        self.charge_current_is_positive = self.cell_model['Positive Charge Current']
+        self.charge_current_is_positive = self.cell_model['Positive Charging Current']
     
     def set_initial_conditions_ECM(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
         """
