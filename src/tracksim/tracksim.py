@@ -27,6 +27,39 @@ def exp_average(a, alpha):
     
     return ma
 
+def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, Ns, Np):
+    
+    if cells_are_identical:
+        rT = r0/Np # Thevenin eq. resistance per module
+        vT = vf # Thevenin eq. voltage per module
+        rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
+        vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
+        
+        I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
+        V = vT_pack - rT_pack*I
+        
+        vk = V/Ns # PCM terminal voltages
+        ik = (vf-vk)/r0 # Individual cell currents
+        
+        vk = vf - r0*ik # Get individual cell voltages
+    
+    else:
+        rT = 1/np.sum(1/r0,axis=1) # Thevenin eq. resistance per module
+        vT = np.sum(vf/r0,axis=1)*rT # Thevenin eq. voltage per module
+        rT_pack = np.sum(rT) # Thevenin eq. resistance for whole pack
+        vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
+        
+        I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
+        V = vT_pack - rT_pack*I
+        
+        vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
+        vk = np.tile(vk, (Np,1)).T
+        ik = (vf-vk)/r0 # Individual cell currents
+        
+        vk = vf - r0*ik # Get individual cell voltages
+
+    return ik, vk, I, V
+
 class Traffic():
     """
     Class used to define and run the traffic simulation. The main method of 
@@ -35,7 +68,7 @@ class Traffic():
     
     def __init__(self, config_path, output_dir='simulated_trip_files', duration=24, 
                  time_step=1, record_position=False, record_lane=False, 
-                 pbar=True, lite_mode_ratio=None, lite_mode_seed=None, 
+                 pbar=True, lite_mode_ratio=None, random_state=None, 
                  remove_split_trip_files=True):
         """
         Initializes the Traffic class used for simulating the vehicle traffic. 
@@ -74,10 +107,13 @@ class Traffic():
             calling the 'process_simulation_data' method. NOTE: all trips 
             still need to be simulated, this variable only affects the processing
             of the simulated trips after simulation. The default is None.
-        lite_mode_seed : int, optional
-            Sets the seed for the randomizer used to select the trips to 
-            process if 'lite_mode_ratio' is not None. If 'lite_mode_seed' is 
-            None, then no seed is set. The default is None.
+        random_state : int or str, optional
+            Sets the seed for the randomizer used to shuffle the order of the 
+            trips to process in 'process_trips'. If None, then the randomizer is 
+            initialized without setting a seed. If 'off', then the order to
+            process the trips is not randomized. Note: if random_state is 'off',
+            then it will switch to None if lite_mode_ratio is not None. The 
+            default is None.
         remove_split_trip_files : bool, optional
             Removes the intermediate trip files generated after simulation
             and before the final processing if True. These files are mainly 
@@ -109,7 +145,11 @@ class Traffic():
             if (self.lite_mode_ratio > 1) or (self.lite_mode_ratio < 0):
                 raise ValueError("Please provide 'lite_mode_ratio' as a number between 0 (inclusive) and 1 (inclusive)")
         
-        self.lite_mode_seed = lite_mode_seed
+        if (self.lite_mode_ratio is None) and (self.random_state == 'off'):
+            # We need randomness to shuffle the trips
+            self.random_state = None
+        
+        self.random_state = random_state
         self.remove_split_trip_files = remove_split_trip_files
     
     def update_vehicle_data(self, veh_id, data, step):
@@ -228,14 +268,15 @@ class Traffic():
         
         veh_ids = list({file.split('_')[0] for file in os.listdir('simulated_trips_split')})
         
-        if self.lite_mode_ratio is not None:
-            
-            if self.lite_mode_seed is not None:
-                rng = np.random.default_rng(self.lite_mode_seed)
-            else:
+        if self.random_state != 'off':
+            if self.random_state is None:
                 rng = np.random.default_rng()
-            
+            else:
+                rng = np.random.default_rng(self.random_state)
+        
             rng.shuffle(veh_ids)
+        
+        if self.lite_mode_ratio is not None:
             veh_ids = veh_ids[:int(np.ceil(len(veh_ids)*0.3))]
         
         pool = Pool()
@@ -436,11 +477,22 @@ class Pack():
         
         self.cell_model_is_dynamic = False
         
-        if self.cell_model_is_array:
-            self.cell_model_is_dynamic = callable(self.cell_model[0,0]['R0'])
         
+        if 'ECM' in self.cell_model['Model Type']:
+            if self.cell_model_is_array:
+                self.cell_model_is_dynamic = callable(self.cell_model[0,0]['R0'])
+            
+            else:
+                self.cell_model_is_dynamic = callable(self.cell_model['R0'])
+        
+        elif 'ARX' in self.cell_model['Model Type']:
+            if self.cell_model_is_array:
+                self.cell_model_is_dynamic = callable(self.cell_model[0,0]['b0'])
+            
+            else:
+                self.cell_model_is_dynamic = callable(self.cell_model['b0'])
         else:
-            self.cell_model_is_dynamic = callable(self.cell_model['R0'])
+            raise KeyError('Please check model type')
 
         self.temperature_model = temperature_model
         self.temperature_model_is_array = isinstance(self.temperature_model, np.ndarray)
@@ -477,8 +529,10 @@ class Pack():
         
         self.initial_conditions = None
         self.simulation_results = None
+        self.identical_cells = False
+        self.charge_current_is_positive = self.cell_model['Positive Charge Current']
     
-    def set_initial_conditions(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
+    def set_initial_conditions_ECM(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
         """
         Sets the initial conditions for the battery pack before the simulation.
 
@@ -535,21 +589,32 @@ class Pack():
             raise ValueError("Please provide 'irc' as either an int, float, or ndarray.")
         
         if isinstance(cell_temp, (int, float)):
-            self.initial_conditions['cell_temp'] = np.ones(shape=(Ns,Np))*cell_temp + 273.15
+            self.initial_conditions['cell_temp'] = np.ones(shape=(Ns,Np))*cell_temp
         elif isinstance(cell_temp, np.ndarray):
-            self.initial_conditions['cell_temp'] = cell_temp + 273.15
+            self.initial_conditions['cell_temp'] = cell_temp
         else:
             raise ValueError("Please provide 'cell_temp' as either an int, float or ndarray.")
         
         if isinstance(coolant_temp, (int, float)):
-            self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp + 273.15
+            self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
         else:
             raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
     
-    def initialize_simulation(self, sim_len, time_delta, num_rc_pairs):
+    def simulate_pack(self, desired_power, time_delta):
+        
+        if 'ECM' in self.cell_model['Model Type']:
+            self.simulate_pack_ECM(desired_power, time_delta)
+            
+        elif 'ARX' in self.cell_model['Model Type']:
+            self.simulate_pack_ARX(desired_power, time_delta)
+            
+        else:
+            raise KeyError('Please check model type')
+    
+    def initialize_simulation_ECM(self, sim_len, time_delta, num_rc_pairs, cells_are_identical):
         """
         Initializes the storage for the simulation results. This method is only
-        intended to be used by the simulate_pack method and not on its own.
+        intended to be used by the simulate_pack_ECM method and not on its own.
 
         Parameters
         ----------
@@ -564,8 +629,12 @@ class Pack():
 
         """
         
-        Ns = self.Ns
-        Np = self.Np
+        if cells_are_identical:
+            Ns = 1
+            Np = 1
+        else:
+            Ns = self.Ns
+            Np = self.Np
         
         self.simulation_results = dict()
         
@@ -593,7 +662,7 @@ class Pack():
                     self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'] = np.zeros(sim_len) # Ohm
                     self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'] = np.zeros(sim_len) # F
             
-    def simulate_pack(self, desired_power, time_delta):
+    def simulate_pack_ECM(self, desired_power, time_delta):
         """
         Simulates the battery pack under the given battery power profile.
 
@@ -618,7 +687,7 @@ class Pack():
         
         if self.initial_conditions is None:
             print('No initial conditions set. Initializing with default values.')
-            self.set_initial_conditions()
+            self.set_initial_conditions_ECM()
         
         # Initialize temporary variables
         
@@ -637,7 +706,21 @@ class Pack():
         irc = self.initial_conditions['rc_current']
         T = self.initial_conditions['cell_temp']
         Tf = self.initial_conditions['coolant_temp']
-
+        
+        cells_are_identical = False
+        if not self.cell_model_is_array:
+            
+            if np.allclose(z, z[0,0]) and np.allclose(irc, irc[0,0]) and np.allclose(T, T[0,0]) and np.allclose(Tf, Tf[0,0]):
+                # If the cells have the same parameters and the same initial 
+                # conditions, then only simulate one cell
+                cells_are_identical = True
+                Ns = 1
+                Np = 1
+                z = z[0,0].reshape(1,1)
+                irc = irc[0,0].reshape(1,1)
+                T = T[0,0].reshape(1,1)
+                Tf = Tf[0,0].reshape(1,1)
+        
         # Initialize cell parameters
         
         q = np.zeros(shape=(Ns,Np)) # Ns x Np
@@ -656,12 +739,12 @@ class Pack():
                         
                         q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
                         eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
-                        r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j] - 273.15)
+                        r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j])
                         r0[i,j] += 2*self.cell_model[i,j]['Tab Resistance [Ohm]']
                         
                         for l in range(num_rc_pairs):
-                            r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j] - 273.15)
-                            c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j] - 273.15)
+                            r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j])
+                            c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j])
                             rc[l,i,j] = np.exp(-time_delta/np.abs(r[l,i,j]*c[l,i,j]))
             
             else:
@@ -686,7 +769,7 @@ class Pack():
             
             if self.cell_model_is_dynamic:
                 
-                r0 = self.cell_model['R0'](z, T - 273.15)
+                r0 = self.cell_model['R0'](z, T)
                 r0 += 2*np.ones(shape=(Ns,Np))*self.cell_model['Tab Resistance [Ohm]'] # Add tab resistance for each cell
                 
                 r = np.zeros(shape=(num_rc_pairs, Ns, Np))
@@ -694,8 +777,8 @@ class Pack():
                 rc = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 
                 for l in range(num_rc_pairs):
-                  r[l,:,:] = self.cell_model[f'R{l+1}'](z, T - 273.15)
-                  c[l,:,:] = self.cell_model[f'C{l+1}'](z, T - 273.15)
+                  r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
+                  c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
                   rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             else:
@@ -711,8 +794,6 @@ class Pack():
                   r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1}']
                   c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1}']
                   rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
-        
-        
         
         if self.temperature_model is not None:
             
@@ -757,7 +838,7 @@ class Pack():
         
             e = np.exp((-h*A*time_delta)/m*Cp)
         
-        self.initialize_simulation(len(desired_power), time_delta, num_rc_pairs) # Initialize storage
+        self.initialize_simulation_ECM(len(desired_power), time_delta, num_rc_pairs, cells_are_identical) # Initialize storage
         
         for k in range(sim_len):
             
@@ -771,20 +852,19 @@ class Pack():
             
             v_cells -= np.sum(r*irc, axis=0) # Add diffusion voltages
             
-            rT = 1/np.sum(1/r0,axis=1) # Thevenin eq. resistance per module
-            vT = np.sum(v_cells/r0,axis=1)*rT # Thevenin eq. voltage per module
-            rT_pack = np.sum(rT) # Thevenin eq. resistance for whole pack
-            vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
-            
-            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power[k]*1000))/(2*rT_pack) # Find necessary current for the desired power
-            
-            V = (np.sum(v_cells/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
-            ik = (v_cells-np.tile(V,(Np,1)).T)/r0 # Individual cell currents
-            
-            ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
-            
-            z -= (time_delta/(3600*q))*ik # Update SOC
-            irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
+            if self.charge_current_is_positive:
+                
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, -r0, -desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
+                z += (time_delta/(3600*q))*ik # Update SOC
+                irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
+                
+            else:
+                
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
+                z -= (time_delta/(3600*q))*ik # Update SOC
+                irc = rc*irc - (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
             
             # Update temperature
             if self.temperature_model is not None:
@@ -800,8 +880,12 @@ class Pack():
                 else:
                     dOCV_dT = self.temperature_model['Entropic Heat Coefficient'](z)
                 
-                Qk = ik**2*r0 - ik*np.sum(irc*r, axis=0) + ik*T*dOCV_dT
-                T = e*T + (1-e)*(Qk/(h*A) + Tf)
+                if self.charge_current_is_positive:
+                    Qk = ik**2*r0 + ik*np.sum(irc*r, axis=0) + ik*(T+273.15)*dOCV_dT
+                else:
+                    Qk = ik**2*r0 - ik*np.sum(irc*r, axis=0) - ik*(T+273.15)*dOCV_dT
+                
+                T = e*(T+273.15) + (1-e)*(Qk/(h*A) + (Tf+273.15)) - 273.15
             
             # Update ECM parameters
             if self.cell_model_is_dynamic:
@@ -810,25 +894,25 @@ class Pack():
 
                     for i in range(Ns):
                         for j in range(Np):
-                            r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j] - 273.15)
+                            r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j])
                             
                             for l in range(num_rc_pairs):
-                                r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j] - 273.15)
-                                c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j] - 273.15)
+                                r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j])
+                                c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j])
                     
                     for l in range(num_rc_pairs):
                         rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
                 
                 else:
-                    r0 = self.cell_model['R0'](z, T - 273.15)
+                    r0 = self.cell_model['R0'](z, T)
                     for l in range(num_rc_pairs):
-                        r[l,:,:] = self.cell_model[f'R{l+1}'](z, T - 273.15)
-                        c[l,:,:] = self.cell_model[f'C{l+1}'](z, T - 273.15)
+                        r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
+                        c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
                         rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             # Store measurements
-            self.simulation_results['pack']['current'][k] = I
-            self.simulation_results['pack']['voltage'][k] = np.sum(V)
+            self.simulation_results['pack']['current'][k] = self.Np*ik # I
+            self.simulation_results['pack']['voltage'][k] = self.Ns*vk #V 
             self.simulation_results['pack']['min_soc'][k] = np.min(z)
             self.simulation_results['pack']['max_soc'][k] = np.max(z)
             self.simulation_results['pack']['avg_soc'][k] = np.mean(z)
@@ -840,14 +924,324 @@ class Pack():
                 for j in range(Np):
                     self.simulation_results[f'cell_{i}-{j}']['R0'][k] = r0[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = V[i]
+                    self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i, j]
                     self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j] -273.15
+                    self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
                     for l in range(num_rc_pairs):
                         self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'][k] = irc[l,i,j]
                         self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'][k] = r[l,i,j]
                         self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'][k] = c[l,i,j]
+    
+    def set_initial_conditions_ARX(self, soc=0.8, cell_temp=25, coolant_temp=25):
+        """
+        Sets the initial conditions for the battery pack before the simulation.
 
+        Parameters
+        ----------
+        soc : float or ndarray of floats, optional
+            Contains the initial SOC for each cell expressed as a percentage 
+            (between 0 and 1) stored in an (n_series*n_modules) X n_parallel 
+            ndarray. If a float is given instead, each cell is initialized with 
+            the same SOC. By default, all cells are initialized with an SOC 
+            of 0.8.
+        
+        cell_temp : int, float or ndarray of floats, optional
+            Contains the initial temperature for each cell expressed in Celsius 
+            stored in an (n_series*n_modules) X n_parallel ndarray. If an int 
+            or float is given instead, each cell is initialized with the same 
+            SOC. By  default, all cells are initialized with atemperature of 
+            25 deg C.
+        
+        coolant_temp : int or float, optional
+            Temperature of the coolant to be applied to each cell in Celsius. 
+            By default, the coolant is set at 25 deg Celsius.
+        
+        Returns
+        -------
+        None.
+
+        """
+        
+        Ns = self.Ns
+        Np = self.Np
+        
+        self.initial_conditions = dict()
+        
+        if isinstance(soc, (int, float)):
+            self.initial_conditions['SOC'] = np.ones(shape=(Ns,Np))*soc
+        elif isinstance(soc, np.ndarray):
+            self.initial_conditions['SOC'] = soc
+        else:
+            raise ValueError("Please provide 'soc' as either an int, float, or ndarray.")
+        
+        if isinstance(cell_temp, (int, float)):
+            self.initial_conditions['cell_temp'] = np.ones(shape=(Ns,Np))*cell_temp
+        elif isinstance(cell_temp, np.ndarray):
+            self.initial_conditions['cell_temp'] = cell_temp
+        else:
+            raise ValueError("Please provide 'cell_temp' as either an int, float or ndarray.")
+        
+        if isinstance(coolant_temp, (int, float)):
+            self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
+        else:
+            raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
+    
+    def initialize_simulation_ARX(self, sim_len, time_delta, model_order, cells_are_identical):
+        """
+        Initializes the storage for the simulation results. This method is only
+        intended to be used by the simulate_pack_ARX method and not on its own.
+
+        Parameters
+        ----------
+        sim_len : int
+            Length of simulation in samples.
+        time_delta : float
+            Length of time between samples in seconds.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if cells_are_identical:
+            Ns = 1
+            Np = 1
+        else:
+            Ns = self.Ns
+            Np = self.Np
+        
+        self.simulation_results = dict()
+        
+        # Set up storage
+        self.simulation_results['time'] = np.arange(sim_len)*time_delta # s
+        self.simulation_results['pack'] = dict()
+        self.simulation_results['pack']['current'] = np.zeros(sim_len) # A
+        self.simulation_results['pack']['voltage'] = np.zeros(sim_len) # V
+        self.simulation_results['pack']['min_soc'] = np.zeros(sim_len) # Minimum SOC of all cells
+        self.simulation_results['pack']['max_soc'] = np.zeros(sim_len) # Maximum SOC of all cells
+        self.simulation_results['pack']['avg_soc'] = np.zeros(sim_len) # Average SOC of all cells
+        self.simulation_results['pack']['min_temp'] = np.zeros(sim_len) # Minimum temperature of all cells
+        self.simulation_results['pack']['max_temp'] = np.zeros(sim_len) # Maximum temperature of all cells
+        self.simulation_results['pack']['avg_temp'] = np.zeros(sim_len) # Average temperature of all cells
+        for i in range(Ns):
+            for j in range(Np):
+                self.simulation_results[f'cell_{i}-{j}'] = dict()
+                self.simulation_results[f'cell_{i}-{j}']['current'] = np.zeros(sim_len) # A
+                self.simulation_results[f'cell_{i}-{j}']['voltage'] = np.zeros(sim_len) # V
+                self.simulation_results[f'cell_{i}-{j}']['soc'] = np.zeros(sim_len)
+                self.simulation_results[f'cell_{i}-{j}']['temp'] = np.zeros(sim_len) # Deg C
+                self.simulation_results[f'cell_{i}-{j}']['b0'] = np.zeros(sim_len)
+                for l in range(model_order):
+                    self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'] = np.zeros(sim_len)
+                    self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'] = np.zeros(sim_len)
+            
+    def simulate_pack_ARX(self, desired_power, time_delta):
+        """
+        Simulates the battery pack under the given battery power profile.
+
+        Parameters
+        ----------
+        desired_power : iterable
+            Profile of the demanded power in kW.
+        time_delta : float
+            Length of time between samples in seconds.
+
+        Raises
+        ------
+        AttributeError
+            Raised if the set_initial_conditions method has not been run before
+            starting the simulation.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if self.initial_conditions is None:
+            print('No initial conditions set. Initializing with default values.')
+            self.set_initial_conditions_ARX()
+        
+        # Initialize temporary variables
+        
+        Ns = self.Ns
+        Np = self.Np
+        
+        if self.cell_model_is_array:
+            model_order = self.cell_model[0,0]['Model Order']
+        else:
+            model_order = self.cell_model['Model Order']
+        
+        sim_len = len(desired_power)
+        
+        # Initialize cell states
+        z = self.initial_conditions['SOC']
+        T = self.initial_conditions['cell_temp'] # Celsius
+        
+        cells_are_identical = False
+        if not self.cell_model_is_array:
+            
+            if np.allclose(z, z[0,0]) and np.allclose(T, T[0,0]):
+                # If the cells have the same parameters and the same initial 
+                # conditions, then only simulate one cell
+                cells_are_identical = True
+                Ns = 1
+                Np = 1
+                z = z[0,0].reshape(1,1)
+                T = T[0,0].reshape(1,1)
+        
+        # Initialize cell parameters
+        
+        q = np.zeros(shape=(Ns,Np)) # Ns x Np
+        eta = np.zeros(shape=(Ns,Np)) # Ns x Np
+        b0 = np.zeros(shape=(Ns,Np)) # Ns x Np
+        a = np.zeros(shape=(model_order, Ns, Np)) # model_order x Ns x Np
+        b = np.zeros(shape=(model_order, Ns, Np)) # model_order x Ns x Np
+        
+        # Initialize matrices for storing history values
+        
+        v_hist = np.ones(shape=(model_order, Ns, Np))*self.cell_model['OCV'](z, T)
+        ocv_hist = v_hist.copy()
+        i_hist = np.zeros(shape=(model_order, Ns, Np))
+        T_hist = np.ones(shape=(model_order, Ns, Np))*T
+        z_hist = np.ones(shape=(model_order, Ns, Np))*z
+        
+        if self.cell_model_is_array:
+            
+            if self.cell_model_is_dynamic:
+                
+                for i in range(Ns):
+                    for j in range(Np):
+                        
+                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
+                        b0[i,j] = self.cell_model[i,j]['b0'](z[i,j], T[i,j])
+                        
+                        for l in range(model_order):
+                            a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+                            b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+            
+            else:
+                
+                for i in range(Ns):
+                    for j in range(Np):
+                        
+                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
+                        b0[i,j] = self.cell_model[i,j]['b0']
+                        
+                        for l in range(model_order):
+                            a[l,i,j] = self.cell_model[i,j][f'a{l+1}']
+                            b[l,i,j] = self.cell_model[i,j][f'b{l+1}']
+                
+        else:
+            
+            q = np.ones(shape=(Ns,Np))*self.cell_model['Capacity [Ah]']
+            eta = np.ones(shape=(Ns,Np))*self.cell_model['Coulombic Efficiency']
+            
+            if self.cell_model_is_dynamic:
+                
+                b0 = self.cell_model['b0'](z, T)
+                
+                for l in range(model_order):
+                    a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist[l,:,:], T_hist[l,:,:])
+                    b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist[l,:,:], T_hist[l,:,:])
+                  
+            else:
+                
+                b0 = np.ones(shape=(Ns,Np))*self.cell_model['b0']
+                
+                for l in range(model_order):
+                    a[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'a{l+1}']
+                    b[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'b{l+1}']
+        
+        
+        
+        self.initialize_simulation_ARX(sim_len, time_delta, model_order, cells_are_identical) # Initialize storage
+        
+        for k in range(sim_len):
+            
+            # Get the current OCV
+            
+            if self.cell_model_is_array:
+                ocv = np.zeros(shape=(Ns,Np))
+                for i in range(Ns):
+                    for j in range(Np):
+                        ocv[i,j] = self.cell_model[i,j]['OCV'](z[i,j], T[i,j])
+                        
+            else:
+                ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
+            
+            v_cells = np.sum(a*(v_hist-ocv_hist) + b*i_hist, axis=0) + ocv # Get Vf
+            
+            if self.charge_current_is_positive:
+                
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, -b0, -desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
+                z += (time_delta/(3600*q))*ik # Update SOC
+            
+            else:
+                
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, -b0, desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
+                z -= (time_delta/(3600*q))*ik # Update SOC
+            
+            # Update history matrices
+            
+            for l in range(model_order-1):
+                v_hist[-(l+1),:,:] = v_hist[-(l+2),:,:]
+                ocv_hist[-(l+1),:,:] = ocv_hist[-(l+2),:,:]
+                i_hist[-(l+1),:,:] = i_hist[-(l+2),:,:]
+                T_hist[-(l+1),:,:] = T_hist[-(l+2),:,:]
+                z_hist[-(l+1),:,:] = z_hist[-(l+2),:,:]
+            
+            v_hist[0,:,:] = vk
+            ocv_hist[0,:,:] = ocv
+            i_hist[0,:,:] = ik
+            T_hist[0,:,:] = T
+            z_hist[0,:,:] = z
+            
+            # Update ARX parameters
+            if self.cell_model_is_dynamic:
+                
+                if self.cell_model_is_array:
+
+                    for i in range(Ns):
+                        for j in range(Np):
+                            b0[i,j] = self.cell_model[i,j]['b0'](z[i,j], T[i,j])
+                            
+                            for l in range(model_order):
+                                a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+                                b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+                
+                else:
+                    b0 = self.cell_model['b0'](z, T)
+                    for l in range(model_order):
+                        a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist, T_hist)
+                        b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist, T_hist)
+                        
+            # Store measurements
+            self.simulation_results['pack']['current'][k] = I
+            self.simulation_results['pack']['voltage'][k] = V
+            self.simulation_results['pack']['min_soc'][k] = np.min(z)
+            self.simulation_results['pack']['max_soc'][k] = np.max(z)
+            self.simulation_results['pack']['avg_soc'][k] = np.mean(z)
+            self.simulation_results['pack']['min_temp'][k] = np.min(T)
+            self.simulation_results['pack']['max_temp'][k] = np.max(T)
+            self.simulation_results['pack']['avg_temp'][k] = np.mean(T)
+            
+            for i in range(Ns):
+                for j in range(Np):
+                    self.simulation_results[f'cell_{i}-{j}']['b0'][k] = b0[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
+                    for l in range(model_order):
+                        self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
+                        self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'][k] = b[l,i,j]
+            
 class Vehicle():
     
     def __init__(self, vehicle_model, pack):
