@@ -27,21 +27,37 @@ def exp_average(a, alpha):
     
     return ma
 
-def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, Ns, Np):
+def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charge_current_is_positive, Ns, Np):
     
     if cells_are_identical:
-        rT = r0/Np # Thevenin eq. resistance per module
-        vT = vf # Thevenin eq. voltage per module
-        rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
-        vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
         
-        I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
-        V = vT_pack - rT_pack*I
+        if charge_current_is_positive:
+            rT = r0/Np # Thevenin eq. resistance per module
+            vT = vf # Thevenin eq. voltage per module
+            rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
+            vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
+            
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000))/(-2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack + rT_pack*I
+            
+            vk = V/Ns # PCM terminal voltages
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf + r0*ik # Get individual cell voltages
         
-        vk = V/Ns # PCM terminal voltages
-        ik = (vf-vk)/r0 # Individual cell currents
-        
-        vk = vf - r0*ik # Get individual cell voltages
+        else:
+            rT = r0/Np # Thevenin eq. resistance per module
+            vT = vf # Thevenin eq. voltage per module
+            rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
+            vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
+            
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I
+            
+            vk = V/Ns # PCM terminal voltages
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf - r0*ik # Get individual cell voltages
     
     else:
         rT = 1/np.sum(1/r0,axis=1) # Thevenin eq. resistance per module
@@ -529,7 +545,6 @@ class Pack():
         
         self.initial_conditions = None
         self.simulation_results = None
-        self.identical_cells = False
         self.charge_current_is_positive = self.cell_model['Positive Charging Current']
     
     def set_initial_conditions_ECM(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
@@ -656,6 +671,7 @@ class Pack():
                 self.simulation_results[f'cell_{i}-{j}']['current'] = np.zeros(sim_len) # A
                 self.simulation_results[f'cell_{i}-{j}']['voltage'] = np.zeros(sim_len) # V
                 self.simulation_results[f'cell_{i}-{j}']['soc'] = np.zeros(sim_len)
+                self.simulation_results[f'cell_{i}-{j}']['ocv'] = np.zeros(sim_len) # V
                 self.simulation_results[f'cell_{i}-{j}']['temp'] = np.zeros(sim_len) # Deg C
                 for l in range(num_rc_pairs):
                     self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'] = np.zeros(sim_len) # A
@@ -843,25 +859,25 @@ class Pack():
         for k in range(sim_len):
             
             if self.cell_model_is_array:
-                v_cells = np.zeros(shape=(Ns,Np))
+                ocv = np.zeros(shape=(Ns,Np))
                 for i in range(Ns):
                     for j in range(Np):
-                        v_cells[i,j] = self.cell_model[i,j]['OCV'](z[i,j], T[i,j])
+                        ocv[i,j] = self.cell_model[i,j]['OCV'](z[i,j], T[i,j])
             else:
-                v_cells = self.cell_model['OCV'](z,T) # Get OCV for each cell
+                ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
             
-            v_cells -= np.sum(r*irc, axis=0) # Add diffusion voltages
+            v_cells = ocv - np.sum(r*irc, axis=0) # Add diffusion voltages
             
             if self.charge_current_is_positive:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, -r0, -desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, -r0, -desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
                 z += (time_delta/(3600*q))*ik # Update SOC
                 irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
                 
             else:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
                 z -= (time_delta/(3600*q))*ik # Update SOC
                 irc = rc*irc - (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
@@ -911,8 +927,8 @@ class Pack():
                         rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             # Store measurements
-            self.simulation_results['pack']['current'][k] = self.Np*ik # I
-            self.simulation_results['pack']['voltage'][k] = self.Ns*vk #V 
+            self.simulation_results['pack']['current'][k] = I
+            self.simulation_results['pack']['voltage'][k] = V 
             self.simulation_results['pack']['min_soc'][k] = np.min(z)
             self.simulation_results['pack']['max_soc'][k] = np.max(z)
             self.simulation_results['pack']['avg_soc'][k] = np.mean(z)
@@ -926,6 +942,7 @@ class Pack():
                     self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i, j]
                     self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['ocv'][k] = ocv[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
                     for l in range(num_rc_pairs):
                         self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'][k] = irc[l,i,j]
@@ -1030,6 +1047,7 @@ class Pack():
                 self.simulation_results[f'cell_{i}-{j}']['current'] = np.zeros(sim_len) # A
                 self.simulation_results[f'cell_{i}-{j}']['voltage'] = np.zeros(sim_len) # V
                 self.simulation_results[f'cell_{i}-{j}']['soc'] = np.zeros(sim_len)
+                self.simulation_results[f'cell_{i}-{j}']['ocv'] = np.zeros(sim_len)
                 self.simulation_results[f'cell_{i}-{j}']['temp'] = np.zeros(sim_len) # Deg C
                 self.simulation_results[f'cell_{i}-{j}']['b0'] = np.zeros(sim_len)
                 for l in range(model_order):
@@ -1173,19 +1191,23 @@ class Pack():
             else:
                 ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
             
+            z_old = z.copy() # Save soc_k for later storing
+            
             v_cells = np.sum(a*(v_hist-ocv_hist) + b*i_hist, axis=0) + ocv # Get Vf
             
             if self.charge_current_is_positive:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, -b0, -desired_power[k], cells_are_identical, self.Ns, self.Np)
-                ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
-                z += (time_delta/(3600*q))*ik # Update SOC
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, b0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
+                ik_eta_corrected = ik.copy()
+                ik_eta_corrected[ik_eta_corrected>0] = ik_eta_corrected[ik_eta_corrected>0]*eta[ik_eta_corrected>0] # Multiply by eta for cells where we are charging
+                z += (time_delta/(3600*q))*ik_eta_corrected # Update SOC
             
             else:
                 
                 ik, vk, I, V = get_cell_currents_voltages(v_cells, -b0, desired_power[k], cells_are_identical, self.Ns, self.Np)
-                ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
-                z -= (time_delta/(3600*q))*ik # Update SOC
+                ik_eta_corrected = ik.copy()
+                ik_eta_corrected[ik_eta_corrected<0] = ik_eta_corrected[ik_eta_corrected<0]*eta[ik_eta_corrected<0] # Multiply by eta for cells where we are charging
+                z += (time_delta/(3600*q))*ik_eta_corrected # Update SOC
             
             # Update history matrices
             
@@ -1200,7 +1222,7 @@ class Pack():
             ocv_hist[0,:,:] = ocv
             i_hist[0,:,:] = ik
             T_hist[0,:,:] = T
-            z_hist[0,:,:] = z
+            z_hist[0,:,:] = z_old
             
             # Update ARX parameters
             if self.cell_model_is_dynamic:
@@ -1209,7 +1231,7 @@ class Pack():
 
                     for i in range(Ns):
                         for j in range(Np):
-                            b0[i,j] = self.cell_model[i,j]['b0'](z[i,j], T[i,j])
+                            b0[i,j] = self.cell_model[i,j]['b0'](z_old[i,j], T[i,j])
                             
                             for l in range(model_order):
                                 a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
@@ -1224,9 +1246,9 @@ class Pack():
             # Store measurements
             self.simulation_results['pack']['current'][k] = I
             self.simulation_results['pack']['voltage'][k] = V
-            self.simulation_results['pack']['min_soc'][k] = np.min(z)
-            self.simulation_results['pack']['max_soc'][k] = np.max(z)
-            self.simulation_results['pack']['avg_soc'][k] = np.mean(z)
+            self.simulation_results['pack']['min_soc'][k] = np.min(z_old)
+            self.simulation_results['pack']['max_soc'][k] = np.max(z_old)
+            self.simulation_results['pack']['avg_soc'][k] = np.mean(z_old)
             self.simulation_results['pack']['min_temp'][k] = np.min(T)
             self.simulation_results['pack']['max_temp'][k] = np.max(T)
             self.simulation_results['pack']['avg_temp'][k] = np.mean(T)
@@ -1236,7 +1258,8 @@ class Pack():
                     self.simulation_results[f'cell_{i}-{j}']['b0'][k] = b0[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z_old[i,j]
+                    self.simulation_results[f'cell_{i}-{j}']['ocv'][k] = ocv[i,j]
                     self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
                     for l in range(model_order):
                         self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
