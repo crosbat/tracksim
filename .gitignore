@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 /examples/simulated_trip_files
 tests.py
+/simulated_trip_files

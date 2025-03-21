@@ -1,6 +1,8 @@
 import pickle
 import time
 import os
+import shutil
+import warnings
 import numpy as np
 import pandas as pd
 import libsumo as ls
@@ -9,33 +11,30 @@ from tqdm import tqdm
 from multiprocessing import Pool
 
 # =============================================================================
-# Traffic simulation functions
+# Utility functions
 # =============================================================================
 
-def moving_average(a,n):
-    ma = np.cumsum(a, dtype=float)
-    ma[n:] = ma[n:] - ma[:-n]
-    
-    return ma[n-1:]/n
+def make_clean_dir(path):
+    if path not in os.listdir():
+        print(f"\nMaking '{path}'")
+        os.mkdir(path)
 
-def exp_average(a, alpha):
-    
-    ma = np.zeros(len(a))
-    ma[0] = a[0]    
-    for i in range(1, len(a)):
-        ma[i] = alpha*a[i]+ (1-alpha)*ma[i-1]
-    
-    return ma
+    else:
+        print(f"\nPurging '{path}'")
+        shutil.rmtree(path)
+        os.mkdir(path)
+
 
 def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charge_current_is_positive, Ns, Np):
     
     if cells_are_identical:
         
+        rT = r0/Np # Thevenin eq. resistance per module
+        vT = vf # Thevenin eq. voltage per module
+        rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
+        vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
+        
         if charge_current_is_positive:
-            rT = r0/Np # Thevenin eq. resistance per module
-            vT = vf # Thevenin eq. voltage per module
-            rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
-            vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
             
             I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000))/(-2*rT_pack) # Find necessary current for the desired power
             V = vT_pack + rT_pack*I
@@ -46,10 +45,6 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
             vk = vf + r0*ik # Get individual cell voltages
         
         else:
-            rT = r0/Np # Thevenin eq. resistance per module
-            vT = vf # Thevenin eq. voltage per module
-            rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
-            vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
             
             I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
             V = vT_pack - rT_pack*I
@@ -65,16 +60,31 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
         rT_pack = np.sum(rT) # Thevenin eq. resistance for whole pack
         vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
         
-        I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
-        V = vT_pack - rT_pack*I
+        if charge_current_is_positive:
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000))/(-2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack + rT_pack*I
+            
+            vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
+            vk = np.tile(vk, (Np,1)).T
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf + r0*ik # Get individual cell voltages
         
-        vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
-        vk = np.tile(vk, (Np,1)).T
-        ik = (vf-vk)/r0 # Individual cell currents
-        
-        vk = vf - r0*ik # Get individual cell voltages
+        else:
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I
+            
+            vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
+            vk = np.tile(vk, (Np,1)).T
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf - r0*ik # Get individual cell voltages
 
     return ik, vk, I, V
+
+# =============================================================================
+# Traffic simulation functions
+# =============================================================================
 
 class Traffic():
     """
@@ -82,10 +92,19 @@ class Traffic():
     this class is 'simulate_traffic'.
     """
     
-    def __init__(self, config_path, output_dir='simulated_trip_files', duration=24, 
-                 time_step=1, record_position=False, record_lane=False, 
-                 pbar=True, lite_mode_ratio=None, random_state=None, 
-                 remove_split_trip_files=True):
+    def __init__(self, 
+                 config_path: str, 
+                 output_dir: str ='simulated_trip_files', 
+                 duration: int = 1, 
+                 time_step: float = 1,
+                 record_position: bool = False, 
+                 record_lane: bool = False, 
+                 pbar: bool = True, 
+                 make_checkpoints: bool = True,
+                 checkpoint_dir: str = 'trip_checkpoints',
+                 lite_mode_ratio: bool = None,
+                 random_state: bool = None,
+                 remove_checkpoints_when_finished: bool = True):
         """
         Initializes the Traffic class used for simulating the vehicle traffic. 
 
@@ -98,7 +117,7 @@ class Traffic():
             directory to store the final simulated trip files. By default, the
             trip files are stored in a directory named 'simulated_trip_files'.
         duration : int, optional
-            Duration of simulation in hours. The default is 24 hours.
+            Duration of simulation in hours. The default is 1 hour.
         time_step : float, optional
             Length of time between samples in the simulation in seconds. The
             default is 1 second between each sample. The minimum value of
@@ -120,23 +139,23 @@ class Traffic():
             of the trips are processed. The trips to process are randomnly 
             selected. If None, then all trips are processed, If 0, then no trips
             are processed and will have to processed manually by the user by 
-            calling the 'process_simulation_data' method. NOTE: all trips 
+            calling the 'process_checkpoints' method. NOTE: all trips 
             still need to be simulated, this variable only affects the processing
             of the simulated trips after simulation. The default is None.
         random_state : int or str, optional
             Sets the seed for the randomizer used to shuffle the order of the 
-            trips to process in 'process_trips'. If None, then the randomizer is 
-            initialized without setting a seed. If 'off', then the order to
-            process the trips is not randomized. Note: if random_state is 'off',
-            then it will switch to None if lite_mode_ratio is not None. The 
-            default is None.
-        remove_split_trip_files : bool, optional
-            Removes the intermediate trip files generated after simulation
+            trips to process in 'process_checkpoints'. If None, then the 
+            randomizer is initialized without setting a seed. If 'off', then 
+            the order to process the trips is not randomized. Note: if 
+            random_state is 'off', then it will switch to None if lite_mode_ratio 
+            is not None. The default is None.
+        remove_checkpoints_when_finished : bool, optional
+            Removes the intermediate checkpoints generated after simulation
             and before the final processing if True. These files are mainly 
             used to leverage disk storage over memory storage and can easily be 
             removed after final processing. It is a good idea to turn this off
-            if you want use 'process simulation data' multiple times with
-            different values of 'lite_mode_ratio' or 'lite_mode_seed' and do
+            if you want use 'process_checkpoints' multiple times with
+            different values of 'lite_mode_ratio' or 'random_state' and do
             not need to run the SUMO simulation again.
 
         Returns
@@ -166,9 +185,10 @@ class Traffic():
             self.random_state = None
         
         self.random_state = random_state
-        self.remove_split_trip_files = remove_split_trip_files
+        self.checkpoint_dir = checkpoint_dir
+        self.remove_checkpoints_when_finished = remove_checkpoints_when_finished
     
-    def update_vehicle_data(self, veh_id, data, step):
+    def update_vehicle_data(self, veh_id: str, data: dict, step: int) -> None:
         
         if veh_id not in data.keys():
             # Initialize entry for vehicle
@@ -181,38 +201,23 @@ class Traffic():
                 data[veh_id]['y [m]'] = [] # y position
             
             if self.record_lane:
-                data[veh_id]['Lane ID'] = [] # Lane id
+                data[veh_id]['Lane ID'] = [] # Network lane id
         
         data[veh_id]['Time [s]'].append(step*self.time_step)
         
-        try:
-            data[veh_id]['Speed [m/s]'].append(ls.vehicle.getSpeed(veh_id))
-           
-            if self.record_position:
-                pos = ls.vehicle.getPosition(veh_id)
-                data[veh_id]['x [m]'].append(pos[0])
-                data[veh_id]['y [m]'].append(pos[1])
-            
-            if self.record_lane:
-                data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id))
-            
-        except ls.TraCIException as error:
-            
-            if 'veh' in veh_id:
-                data[veh_id]['Speed [m/s]'].append(ls.vehicle.getSpeed(veh_id[3:])) # Remove 'veh' indicator since SUMO does not expect that
-               
-                if self.record_position: 
-                    pos = ls.vehicle.getPosition(veh_id[3:])
-                    data[veh_id]['x [m]'].append(pos[0])
-                    data[veh_id]['y [m]'].append(pos[1])
+        data[veh_id]['Speed [m/s]'].append(ls.vehicle.getSpeed(veh_id))
+          
+        if self.record_position:
+            pos = ls.vehicle.getPosition(veh_id)
+            data[veh_id]['x [m]'].append(pos[0])
+            data[veh_id]['y [m]'].append(pos[1])
+       
+        if self.record_lane:
+            data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id))
         
-                if self.record_lane:
-                    data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id[3:]))
-            else:
-                raise error
-                
+        return None
     
-    def process_vehicle_data(self, veh_id):
+    def process_vehicle_data(self, veh_id: str) -> None:
         """
         Processes the vehicle data for one vehicle so the trip is combined into
         one CSV file.
@@ -228,14 +233,14 @@ class Traffic():
     
         """
         
-        veh_files = [file for file in os.listdir('simulated_trips_split') if veh_id+'_' in file]
+        veh_files = [file for file in os.listdir(self.checkpoint_dir) if veh_id+'_' in file]
         veh_files.sort()
         
-        with open(f'simulated_trips_split/{veh_files[0]}', 'rb') as file:
+        with open(f'{self.checkpoint_dir}/{veh_files[0]}', 'rb') as file:
             veh_dict = pickle.load(file)
         
         for veh_file in veh_files[1:]:
-            with open(f'simulated_trips_split/{veh_file}', 'rb') as file:
+            with open(f'{self.checkpoint_dir}/{veh_file}', 'rb') as file:
                 veh_dict_part = pickle.load(file)
             
             for key in veh_dict.keys():
@@ -253,7 +258,7 @@ class Traffic():
     
         return None
     
-    def process_simulation_data(self):
+    def process_checkpoints(self) -> None:
         """
         Processes the vehicle data generated by the method 'simulate_traffic' 
         so data from each vehicle is combined into one CSV file instead of 
@@ -267,22 +272,9 @@ class Traffic():
     
         """
         
-        if self.output_dir not in os.listdir():
-            print(f"\nMaking '{self.output_dir}'")
-            os.mkdir(self.output_dir)
-        else:
-            print(f"\nPurging '{self.output_dir}'")
-            
-            dir_length = len((folder:=os.listdir(self.output_dir)))
-            pbar = tqdm(total=dir_length, position=0, leave=True)
-            if dir_length != 0:
-                for file in folder:
-                    os.remove(f'{self.output_dir}/{file}')
-                    pbar.update()
+        print('\nProcessing checkpoints')
         
-        print('\nProcessing simulation data')
-        
-        veh_ids = list({file.split('_')[0] for file in os.listdir('simulated_trips_split')})
+        veh_ids = list({file.split('_')[0] for file in os.listdir(self.checkpoint_dir)})
         
         if self.random_state != 'off':
             if self.random_state is None:
@@ -293,7 +285,7 @@ class Traffic():
             rng.shuffle(veh_ids)
         
         if self.lite_mode_ratio is not None:
-            veh_ids = veh_ids[:int(np.ceil(len(veh_ids)*0.3))]
+            veh_ids = veh_ids[:int(np.ceil(len(veh_ids)*self.lite_mode_ratio))]
         
         pool = Pool()
         
@@ -309,12 +301,27 @@ class Traffic():
         
         return None
     
-    def simulate_traffic(self):
+    def save_vehicle_data(self, veh_id: str, data: dict) -> None:
+        
+        veh_dict = data[veh_id]
+        
+        for key in veh_dict.keys():
+            # Make all lists to arrays for easier processing
+            veh_dict[key] = np.array(veh_dict[key])
+        
+        # Convert to DataFrame and save as csv file
+        
+        veh_df = pd.DataFrame(veh_dict)
+        
+        veh_df.to_csv(f'{self.output_dir}/{veh_id}.csv', index=False)
+        
+        return None
+    
+    def simulate_traffic(self) -> None:
         """
-        Simulates the traffic from a SUMO config file and tracks the time,
-        position, speed, and ID of the current lane for each vehicle. The 
-        simulation saves vehicle data every hour in order to save on memory 
-        bandwidth.
+        Simulates the traffic from a SUMO config file and tracks the data for 
+        each vehicle in the simulation. The simulation saves vehicle data every 
+        hour in order to save on memory.
     
         Returns
         -------
@@ -322,19 +329,8 @@ class Traffic():
     
         """
         
-        if 'simulated_trips_split' not in os.listdir():
-            print("\nMaking 'simulated_trips_split'")
-            os.mkdir('simulated_trips_split')
-    
-        else:
-            print("\nPurging 'simulated_trips_split'")
-            
-            dir_length = len((folder:=os.listdir('simulated_trips_split')))
-            pbar = tqdm(total=dir_length, position=0, leave=True)
-            if dir_length != 0:
-                for file in folder:
-                    os.remove(f'simulated_trips_split/{file}')
-                    pbar.update()
+        if self.make_checkpoints:
+            make_clean_dir(self.checkpoint_dir)
         
         print('\nStarting simulation')
         
@@ -345,7 +341,7 @@ class Traffic():
         # Initialize simulation
         ls.start(["sumo", "-c", self.config_path, "--step-length", str(self.time_step)])
         print(f'\nStarted simulation with timedelta: {ls.simulation.getDeltaT()}s')
-        n_steps = self.duration*3600*(1/self.time_step)
+        n_steps = np.floor(self.duration*3600*(1/self.time_step))
         
         if self.pbar:
             pbar = tqdm(total=n_steps, position=0, leave=True) # Define progress bar
@@ -353,10 +349,10 @@ class Traffic():
         # Run simulation
         step=0
         while step < n_steps:
-                
+            
             ls.simulationStep()
             veh_list = ls.vehicle.getIDList() # Get vehicles on the road
-            veh_list = ['veh' + veh_id if 'veh' not in veh_id else veh_id for veh_id in veh_list] # Sometimes the 'veh' indicator is omitted (eg. in the Berlin scenario) and needs to be put back in
+            # veh_list = ['veh' + veh_id if 'veh' not in veh_id else veh_id for veh_id in veh_list] # Sometimes the 'veh' indicator is omitted (eg. in the Berlin scenario) and needs to be put back in
             
             try:
                 for veh_id in veh_list:
@@ -366,18 +362,20 @@ class Traffic():
             
             step += 1
             
-            if step > 0 and step%(3600/self.time_step)==0:
-                # For every 1 hour
+            if self.make_checkpoints:
                 
-                timeslot_index = int(step/(3600/self.time_step))
-                
-                for veh_id in data.keys():
-                    # Save the trip data for this vehicle in this timeslot
+                if step > 0 and step%(3600/self.time_step)==0:
+                    # For every 1 hour
                     
-                    with open(f'simulated_trips_split/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
-                        pickle.dump(data[veh_id], file)
-                
-                data = dict() # Reset data storage
+                    timeslot_index = int(step/(3600/self.time_step))
+                    
+                    for veh_id in data.keys():
+                        # Save the trip data for this vehicle in this timeslot
+                        
+                        with open(f'{self.checkpoint_dir}/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
+                            pickle.dump(data[veh_id], file)
+                    
+                    data = dict() # Reset data storage
             
             if self.pbar:
                 pbar.update()
@@ -389,24 +387,20 @@ class Traffic():
         
         print(f'\n Finished simulation in {time.time()-time_start:.2f} seconds!')
         
-        if self.lite_mode_ratio != 0: 
-            self.process_simulation_data()
+        make_clean_dir(self.output_dir)
         
-            if self.remove_split_trip_files:
-                
-                print("\nRemoving 'simulated_trips_split'")
-                
-                dir_length = len((folder:=os.listdir('simulated_trips_split')))
-                pbar = tqdm(total=dir_length, position=0, leave=True)
-                if dir_length != 0:
-                    for file in folder:
-                        os.remove(f'simulated_trips_split/{file}')
-                        pbar.update()
-                
-                os.rmdir('simulated_trips_split')
+        if self.lite_mode_ratio != 0:
+            # If 'lite_mode_ratio' is zero, then do not process any trips
+    
+            self.process_checkpoints()
         
+            if self.remove_checkpoints_when_finished:
+                
+                print(f"\nRemoving '{self.checkpoint_dir}'")
+                shutil.rmtree(f'{self.checkpoint_dir}')
+            
         return None
-
+    
 # =============================================================================
 # Vehicle definitions
 # =============================================================================
@@ -541,11 +535,32 @@ class Pack():
             self.mass = self.n_cells*self.cell_model['Mass [kg]']*1/(1-self.pack_model['Battery Module Overhead'])*1/(1-self.pack_model['Battery Pack Overhead'])
             self.nominal_charge_capacity = self.Np * self.cell_model['Nominal Capacity [Ah]']
             self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal Voltage [V]'] # Wh
+        
+        if self.nominal_energy_capacity < 20000:
+            warnings.warn(f"The nominal energy capacity for this pack is {self.nominal_energy_capacity/1000:.2f} kWh, which is considered low for typical EVs. This may have adverse effects in the simulation if the voltage of the cells goes outside the normal bounds. To increase the nominal capacity, please consider increasing the number of cells by changing the 'No. Cells Series' or 'No. Cells Parallel' values in the pack model.")
+        
         self.efficiency = self.pack_model['Battery Pack Efficiency']
         
         self.initial_conditions = None
         self.simulation_results = None
         self.charge_current_is_positive = self.cell_model['Positive Charging Current']
+    
+    def set_initial_conditions(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
+        
+        if 'ECM' in self.cell_model['Model Type']:
+            self.set_initial_conditions_ECM(soc=soc, 
+                                            irc=irc, 
+                                            cell_temp=cell_temp, 
+                                            coolant_temp=coolant_temp)
+            
+        elif 'ARX' in self.cell_model['Model Type']:
+            self.set_initial_conditions_ARX(soc=soc, 
+                                            cell_temp=cell_temp, 
+                                            coolant_temp=coolant_temp)
+            
+        else:
+            raise KeyError('Please check model type')
+        
     
     def set_initial_conditions_ECM(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
         """
@@ -866,21 +881,21 @@ class Pack():
             else:
                 ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
             
-            v_cells = ocv - np.sum(r*irc, axis=0) # Add diffusion voltages
-            
             if self.charge_current_is_positive:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, -r0, -desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
+                v_cells = ocv + np.sum(r*irc, axis=0) # Add diffusion voltages
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
                 z += (time_delta/(3600*q))*ik # Update SOC
-                irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
                 
             else:
                 
+                v_cells = ocv - np.sum(r*irc, axis=0) # Add diffusion voltages
                 ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
                 z -= (time_delta/(3600*q))*ik # Update SOC
-                irc = rc*irc - (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
+            
+            irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
             
             # Update temperature
             if self.temperature_model is not None:
@@ -897,9 +912,9 @@ class Pack():
                     dOCV_dT = self.temperature_model['Entropic Heat Coefficient'](z)
                 
                 if self.charge_current_is_positive:
-                    Qk = ik**2*r0 + ik*np.sum(irc*r, axis=0) + ik*(T+273.15)*dOCV_dT
-                else:
                     Qk = ik**2*r0 - ik*np.sum(irc*r, axis=0) - ik*(T+273.15)*dOCV_dT
+                else:
+                    Qk = ik**2*r0 + ik*np.sum(irc*r, axis=0) + ik*(T+273.15)*dOCV_dT
                 
                 T = e*(T+273.15) + (1-e)*(Qk/(h*A) + (Tf+273.15)) - 273.15
             
@@ -1204,10 +1219,10 @@ class Pack():
             
             else:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, -b0, desired_power[k], cells_are_identical, self.Ns, self.Np)
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, b0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik_eta_corrected = ik.copy()
                 ik_eta_corrected[ik_eta_corrected<0] = ik_eta_corrected[ik_eta_corrected<0]*eta[ik_eta_corrected<0] # Multiply by eta for cells where we are charging
-                z += (time_delta/(3600*q))*ik_eta_corrected # Update SOC
+                z -= (time_delta/(3600*q))*ik_eta_corrected # Update SOC
             
             # Update history matrices
             
