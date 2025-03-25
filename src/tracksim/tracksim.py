@@ -14,7 +14,21 @@ from multiprocessing import Pool
 # Utility functions
 # =============================================================================
 
-def make_clean_dir(path):
+def make_clean_dir(path: str) -> None:
+    """
+    Cleans a giving directory. If the directory does not exist, then it will
+    be created.
+
+    Parameters
+    ----------
+    path : str
+        Path to the directory.
+
+    Returns
+    -------
+    None.
+
+    """
     if path not in os.listdir():
         print(f"\nMaking '{path}'")
         os.mkdir(path)
@@ -23,10 +37,61 @@ def make_clean_dir(path):
         print(f"\nPurging '{path}'")
         shutil.rmtree(path)
         os.mkdir(path)
-
-
-def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charge_current_is_positive, Ns, Np):
     
+    return None
+
+def get_cell_currents_voltages(vf: np.ndarray, 
+                               r0: np.ndarray, 
+                               desired_power: float, 
+                               cells_are_identical: bool, 
+                               charge_current_is_positive: bool, 
+                               Ns: int, 
+                               Np: int) -> tuple:
+    """
+    Calculates the required cell currents and voltages to meet the desired
+    power of the battery pack. The battery pack is modeled as an equivalent
+    Thevenin circuit i.e.
+    
+    vT = vf - rT*I
+    
+    where vf is the voltage of the voltage source, rT is the Thevenin
+    equivalent resistance, and I is the battery pack current (negative 
+    charge current). The Thevenin equivalent resistance is calcuated based on
+    the individual series resistance of each cell. 
+
+    Parameters
+    ----------
+    vf : numpy.ndarray
+        Non-instantaneous voltage of each battery cell.
+    r0 : numpy.ndarray
+        Series resistance of each cell.
+    desired_power : float
+        Desired power for the current step.
+    cells_are_identical : float
+        If true, then the thevenin equivalent voltage source and resistance are
+        assumed to be the same for all cells. This simplifies the calculation
+        of vT and rT using the number of cells in series and parallel. If False
+        then the cells are treated as not being equal which can slow down
+        computations.
+    charge_current_is_positive : bool
+        Indicates the direction of the current.
+    Ns : int
+        Number of cells in series.
+    Np : int
+        Number of cells in parallel.
+
+    Returns
+    -------
+    ik : numpy.ndarray
+        Individual cell currents for the current step.
+    vk : numpy.ndarray
+        Individual cell voltages for the current step.
+    I : float
+        Battery pack current for the current step.
+    V : float
+        Battery pack voltage for the current step.
+
+    """
     if cells_are_identical:
         
         rT = r0/Np # Thevenin eq. resistance per module
@@ -36,8 +101,10 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
         
         if charge_current_is_positive:
             
-            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000))/(-2*rT_pack) # Find necessary current for the desired power
-            V = vT_pack + rT_pack*I
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000)
+                 )/(-2*rT_pack) # Find necessary current for the desired power
+            
+            V = vT_pack + rT_pack*I # Get pack voltage
             
             vk = V/Ns # PCM terminal voltages
             ik = (vf-vk)/r0 # Individual cell currents
@@ -46,8 +113,9 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
         
         else:
             
-            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
-            V = vT_pack - rT_pack*I
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000)
+                 )/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I # Get pack voltage
             
             vk = V/Ns # PCM terminal voltages
             ik = (vf-vk)/r0 # Individual cell currents
@@ -61,7 +129,8 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
         vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
         
         if charge_current_is_positive:
-            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000))/(-2*rT_pack) # Find necessary current for the desired power
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000)
+                 )/(-2*rT_pack) # Find necessary current for the desired power
             V = vT_pack + rT_pack*I
             
             vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
@@ -71,8 +140,9 @@ def get_cell_currents_voltages(vf, r0, desired_power, cells_are_identical, charg
             vk = vf + r0*ik # Get individual cell voltages
         
         else:
-            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000))/(2*rT_pack) # Find necessary current for the desired power
-            V = vT_pack - rT_pack*I
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000)
+                 )/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I # Get pack voltage
             
             vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
             vk = np.tile(vk, (Np,1)).T
@@ -91,7 +161,6 @@ class Traffic():
     Class used to define and run the traffic simulation. The main method of 
     this class is 'simulate_traffic'.
     """
-    
     def __init__(self, 
                  config_path: str, 
                  output_dir: str ='simulated_trip_files', 
@@ -99,12 +168,11 @@ class Traffic():
                  time_step: float = 1,
                  record_position: bool = False, 
                  record_lane: bool = False, 
-                 pbar: bool = True, 
-                 make_checkpoints: bool = True,
+                 pbar: bool = True,
                  checkpoint_dir: str = 'trip_checkpoints',
                  lite_mode_ratio: bool = None,
-                 random_state: bool = None,
-                 remove_checkpoints_when_finished: bool = True):
+                 random_state: int = None,
+                 remove_checkpoints_when_finished: bool = True) -> None:
         """
         Initializes the Traffic class used for simulating the vehicle traffic. 
 
@@ -114,7 +182,7 @@ class Traffic():
             The path to the SUMO configuration file for the scenario to be 
             simulated.
         output_dir : str, optional
-            directory to store the final simulated trip files. By default, the
+            Directory to store the final simulated trip files. By default, the
             trip files are stored in a directory named 'simulated_trip_files'.
         duration : int, optional
             Duration of simulation in hours. The default is 1 hour.
@@ -135,11 +203,11 @@ class Traffic():
             is True.
         lite_mode_ratio : float, optional
             Can be set as a number between 0 and 1 which gives the ratio of trips 
-            to process in the end, e.g. if 'lite_mode_ratio' is 0.1, only 10%
-            of the trips are processed. The trips to process are randomnly 
-            selected. If None, then all trips are processed, If 0, then no trips
-            are processed and will have to processed manually by the user by 
-            calling the 'process_checkpoints' method. NOTE: all trips 
+            to process in the 'process_checkpoints' method. If 'lite_mode_ratio' 
+            is 0.1, only 10% of the trips are processed. The trips to process 
+            are randomnly selected. If None, then all trips are processed, If 0, 
+            then no trips are processed and will have to processed manually by 
+            the user by calling the 'process_checkpoints' method. NOTE: all trips 
             still need to be simulated, this variable only affects the processing
             of the simulated trips after simulation. The default is None.
         random_state : int or str, optional
@@ -174,19 +242,23 @@ class Traffic():
         self.lite_mode_ratio = lite_mode_ratio
         
         if self.lite_mode_ratio == 1:
+            # Process all trips
             self.lite_mode_ratio = None
         
         if self.lite_mode_ratio is not None:
             if (self.lite_mode_ratio > 1) or (self.lite_mode_ratio < 0):
                 raise ValueError("Please provide 'lite_mode_ratio' as a number between 0 (inclusive) and 1 (inclusive)")
         
-        if (self.lite_mode_ratio is None) and (random_state == 'off'):
+        if (self.lite_mode_ratio is not None) and (random_state == 'off'):
             # We need randomness to shuffle the trips
+            warnings.warn("'random_state' has been switcehd to None since 'lite_mode_ratio' is not None")
             self.random_state = None
         
         self.random_state = random_state
         self.checkpoint_dir = checkpoint_dir
         self.remove_checkpoints_when_finished = remove_checkpoints_when_finished
+        
+        return None
     
     def update_vehicle_data(self, veh_id: str, data: dict, step: int) -> None:
         
@@ -216,7 +288,7 @@ class Traffic():
             data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id))
         
         return None
-    
+
     def process_vehicle_data(self, veh_id: str) -> None:
         """
         Processes the vehicle data for one vehicle so the trip is combined into
@@ -233,7 +305,7 @@ class Traffic():
     
         """
         
-        veh_files = [file for file in os.listdir(self.checkpoint_dir) if veh_id+'_' in file]
+        veh_files = [file for file in os.listdir(self.checkpoint_dir) if veh_id+'_' in file] # Get all checkpoints for this vehicle
         veh_files.sort()
         
         with open(f'{self.checkpoint_dir}/{veh_files[0]}', 'rb') as file:
@@ -257,7 +329,7 @@ class Traffic():
         veh_df.to_csv(f'{self.output_dir}/{veh_id}.csv', index=False)
     
         return None
-    
+
     def process_checkpoints(self) -> None:
         """
         Processes the vehicle data generated by the method 'simulate_traffic' 
@@ -274,6 +346,7 @@ class Traffic():
         
         print('\nProcessing checkpoints')
         
+        # Get the ID of every vehicle
         veh_ids = list({file.split('_')[0] for file in os.listdir(self.checkpoint_dir)})
         
         if self.random_state != 'off':
@@ -300,7 +373,7 @@ class Traffic():
         pool.close()
         
         return None
-    
+
     def save_vehicle_data(self, veh_id: str, data: dict) -> None:
         
         veh_dict = data[veh_id]
@@ -316,7 +389,7 @@ class Traffic():
         veh_df.to_csv(f'{self.output_dir}/{veh_id}.csv', index=False)
         
         return None
-    
+
     def simulate_traffic(self) -> None:
         """
         Simulates the traffic from a SUMO config file and tracks the data for 
@@ -408,68 +481,42 @@ class Traffic():
 class Pack():
     """
     Class used to define a battery pack comprising of one or more modules.
-    
-
-    Attributes
-    ----------
-    n_series : int
-        Number of cells in series per module
-    n_parallel : int
-        Number of cells in parallel per module.
-    n_modules : int
-        Number of modules in the pack.
-    n_cells : int
-        Total number of cells in the pack.
-    cell_mass : float
-        Mass of each cell in kilograms.
-    module_overhead : float
-        Additional weight in the module for packaging, electronics etc. 
-        expressed as a percentage (between 0 and 1) of total mass of the cells.
-    pack_overhead : float
-        Additional weight in the pack for packaging, electronics etc.
-        expressed as a percentage (between 0 and 1) of total mass of the 
-        modules.
-    mass : float
-        Total mass of the pack in kilograms.
-    efficiency : float
-        Total energy efficiency of the pack expressed as a percentage between
-        0 and 1.
-    initial_conditions : dict
-        Initial conditions used in the simulation of the battery pack and set 
-        by the set_initial_conditions method. If the initial conditions have 
-        not been set yet, then the initial_conditions attribute is a NoneType 
-        object.
-    simulation_results : dict
-        Contains relevant results after simualting the battery pack using the
-        simulate_pack method. If the simulation has not been performed yet,
-        then the simulation_results attribute is a NoneType object.
-    
     """
-    def __init__(self, pack_model, cell_model, temperature_model=None):
+
+    def __init__(self, pack_model: dict, 
+                 cell_model: dict, 
+                 temperature_model: dict = None) -> None:
         """
-        Initializes the Pack class.
+        Initializes the Pack class
 
         Parameters
         ----------
-        n_series : int
-            Number of cells in series per module
-        n_parallel : int
-            Number of cells in parallel per module. Every module is assumed to have
-            the same number of cells in parallel.
-        n_modules : int
-            Number of modules in the pack.
-        cell_mass : float
-            Mass of each cell in kilograms.
-        module_overhead : float
-            Additional weight in the module for packaging, electronics etc. 
-            expressed as a percentage (between 0 and 1) of total mass of the cells.
-        pack_overhead : float
-            Additional weight in the pack for packaging, electronics etc.
-            expressed as a percentage (between 0 and 1) of total mass of the 
-            modules.
-        efficiency : float
-            Total energy efficiency of the pack expressed as a percentage between
-            0 and 1.
+        pack_model : dict
+            Dictionary describing the battery pack. The dictionary has to
+            follow the same format as those in tracksim.pack_models.
+        cell_model : dict or numpy.ndarray of dicts
+            Dict or array of dicts describing the model of the cells in the 
+            battery pack. The format of the dict has to follow those in t
+            racksim.cell_models. If one dict is given, then each cell is
+            assumed to follow the same model. If an array of dicts is given,
+            then each each cell is assumed to have a distinct model. WARNING:
+            having different cells will significantly increase computation time.
+        temperature_model : dict or numpy.ndarray of dicts, optional
+            Dict or array of dicts describing the temperature model of the 
+            cells in the battery pack. The format of the dict has to follow 
+            those in tracksim.temperature_models. If one dict is given, then 
+            each cell is assumed to follow the same temperature model. If an 
+            array of dicts is given, then each each cell is assumed to have a 
+            distinct model. WARNING: having different cells will significantly 
+            increase computation time.
+
+        Raises
+        ------
+        ValueError
+            Raised if cell_model or temperature_model are not dicts or array of
+            dicts.
+        KeyError
+            Raised if the 'Model Type' value is not supported.
 
         Returns
         -------
@@ -486,7 +533,6 @@ class Pack():
             raise ValueError('Please give the cell model as either a dictionary or an array of dictionaries. See tracksim.cell_models for a selection of compatible models.')
         
         self.cell_model_is_dynamic = False
-        
         
         if 'ECM' in self.cell_model['Model Type']:
             if self.cell_model_is_array:
@@ -544,9 +590,38 @@ class Pack():
         self.initial_conditions = None
         self.simulation_results = None
         self.charge_current_is_positive = self.cell_model['Positive Charging Current']
-    
-    def set_initial_conditions(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
         
+        return None
+
+    def set_initial_conditions(self, 
+                               soc: float = 0.8, 
+                               irc: float = 0, 
+                               cell_temp: float = 25, 
+                               coolant_temp: float = 25) -> None:
+        """
+        Wrapper for setting initial conditions depending on the model type.
+
+        Parameters
+        ----------
+        soc : float or array of floats, optional
+            Initial SOC. The default is 0.8.
+        irc : float or array of floats, optional
+            Initial diffusion current. The default is 0.
+        cell_temp : float or array of floats, optional
+            Initial cell temperature. The default is 25.
+        coolant_temp : float or array of floats, optional
+            Coolant temperature. The default is 25.
+
+        Raises
+        ------
+        KeyError
+            Raised if the model type is not supported.
+
+        Returns
+        -------
+        None
+
+        """
         if 'ECM' in self.cell_model['Model Type']:
             self.set_initial_conditions_ECM(soc=soc, 
                                             irc=irc, 
@@ -561,10 +636,16 @@ class Pack():
         else:
             raise KeyError('Please check model type')
         
-    
-    def set_initial_conditions_ECM(self, soc=0.8, irc=0, cell_temp=25, coolant_temp=25):
+        return None
+
+    def set_initial_conditions_ECM(self, 
+                                   soc=0.8, 
+                                   irc=0, 
+                                   cell_temp=25, 
+                                   coolant_temp=25):
         """
-        Sets the initial conditions for the battery pack before the simulation.
+        Sets the initial conditions for the battery pack before the simulation,
+        assuming an Equivalent Circuit Model (ECM).
 
         Parameters
         ----------
@@ -629,7 +710,7 @@ class Pack():
             self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
         else:
             raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
-    
+
     def simulate_pack(self, desired_power, time_delta):
         
         if 'ECM' in self.cell_model['Model Type']:
@@ -640,8 +721,12 @@ class Pack():
             
         else:
             raise KeyError('Please check model type')
-    
-    def initialize_simulation_ECM(self, sim_len, time_delta, num_rc_pairs, cells_are_identical):
+
+    def initialize_simulation_ECM(self, 
+                                  sim_len, 
+                                  time_delta, 
+                                  num_rc_pairs, 
+                                  cells_are_identical):
         """
         Initializes the storage for the simulation results. This method is only
         intended to be used by the simulate_pack_ECM method and not on its own.
@@ -652,6 +737,10 @@ class Pack():
             Length of simulation in samples.
         time_delta : float
             Length of time between samples in seconds.
+        num_rc_pairs : int
+            Number of RC pairs in the ECM. Must be at least 1.
+        cells_are_identical : bool
+            Boolean indicaing if the cells are treated as identical cells.
 
         Returns
         -------
@@ -692,7 +781,7 @@ class Pack():
                     self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'] = np.zeros(sim_len) # A
                     self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'] = np.zeros(sim_len) # Ohm
                     self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'] = np.zeros(sim_len) # F
-            
+
     def simulate_pack_ECM(self, desired_power, time_delta):
         """
         Simulates the battery pack under the given battery power profile.
@@ -808,9 +897,9 @@ class Pack():
                 rc = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 
                 for l in range(num_rc_pairs):
-                  r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
-                  c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
-                  rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
+                    r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
+                    c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
+                    rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             else:
                 
@@ -822,9 +911,9 @@ class Pack():
                 rc = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 
                 for l in range(num_rc_pairs):
-                  r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1}']
-                  c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1}']
-                  rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
+                    r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1}']
+                    c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1}']
+                    rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
         
         if self.temperature_model is not None:
             
@@ -963,10 +1052,14 @@ class Pack():
                         self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'][k] = irc[l,i,j]
                         self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'][k] = r[l,i,j]
                         self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'][k] = c[l,i,j]
-    
-    def set_initial_conditions_ARX(self, soc=0.8, cell_temp=25, coolant_temp=25):
+
+    def set_initial_conditions_ARX(self, 
+                                   soc=0.8, 
+                                   cell_temp=25, 
+                                   coolant_temp=25):
         """
-        Sets the initial conditions for the battery pack before the simulation.
+        Sets the initial conditions for the battery pack before the simulation, 
+        assuming an Autoregressive with exogenous inputs (ARX) model.
 
         Parameters
         ----------
@@ -1017,7 +1110,7 @@ class Pack():
             self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
         else:
             raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
-    
+
     def initialize_simulation_ARX(self, sim_len, time_delta, model_order, cells_are_identical):
         """
         Initializes the storage for the simulation results. This method is only
@@ -1068,8 +1161,10 @@ class Pack():
                 for l in range(model_order):
                     self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'] = np.zeros(sim_len)
                     self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'] = np.zeros(sim_len)
-            
-    def simulate_pack_ARX(self, desired_power, time_delta):
+
+    def simulate_pack_ARX(self, 
+                          desired_power, 
+                          time_delta : float):
         """
         Simulates the battery pack under the given battery power profile.
 
@@ -1189,8 +1284,6 @@ class Pack():
                     a[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'a{l+1}']
                     b[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'b{l+1}']
         
-        
-        
         self.initialize_simulation_ARX(sim_len, time_delta, model_order, cells_are_identical) # Initialize storage
         
         for k in range(sim_len):
@@ -1279,7 +1372,7 @@ class Pack():
                     for l in range(model_order):
                         self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
                         self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'][k] = b[l,i,j]
-            
+
 class Vehicle():
     
     def __init__(self, vehicle_model, pack):
@@ -1302,7 +1395,10 @@ class Vehicle():
         self.initial_conditions = None
         self.simulation_results = None
 
-    def initialize_simulation(self, time, speed_desired, time_delta):
+    def initialize_simulation(self, 
+                              time, 
+                              speed_desired, 
+                              time_delta):
         """
         Initializes the storage for the simulation results. This method is only
         intended to be used by the simulate_vehicle method and not on its own.
@@ -1347,7 +1443,7 @@ class Vehicle():
         self.simulation_results['motor_speed'] = np.zeros(sim_len) # RPM
         self.simulation_results['motor_power'] = np.zeros(sim_len) # kW
         self.simulation_results['speed_actual'] = np.zeros(sim_len) # m/s
-    
+
     def set_initial_conditions(self, speed=0, motor_speed=0):
         """
         Sets the initial conditions of the vehicle.
@@ -1368,7 +1464,7 @@ class Vehicle():
         
         self.initial_conditions['speed'] = speed # m/s
         self.initial_conditions['motor_speed'] = motor_speed # RPM
-        
+    
     def simulate_vehicle(self, time, speed_desired, time_delta, off_times=None):
         """
         Simulates the vehicle given the desired speed profile.
@@ -1494,48 +1590,6 @@ class Vehicle():
         """
         
         self.pack.simulate_pack(self.simulation_results['battery_demand'], self.simulation_results['time_delta'])
-
-class ECM():
-    
-    def __init__(self, q, r0, r1, time_constant, time_delta, ocv_curve, soc_curve):
-    
-        # Define model parameters
-        
-        self.q = q
-        self.r0 = r0
-        self. r1 = r1
-        self.time_constant = time_constant
-        self.time_delta = time_delta
-        self.ocv_curve = ocv_curve
-        self.soc_curve = soc_curve
-        
-        # Set initial states
-        
-        self.irc = 0
-        self.soc = 0.5
-        self.ik = 0
-    
-    def step(self, current):
-        
-        # Update state
-        self.soc = self.soc - self.time_delta/self.q*self.ik
-        self.irc = np.exp(-self.time_delta/self.time_constant)*self.irc + (1-np.exp(-self.time_delta/self.time_constant))*self.ik
-        # Update input
-        self.ik = current
-        # Update output
-        OCV = np.interp(self.soc, self.soc_curve, self.ocv_curve)
-        voltage = OCV - self.r1*self.irc - self.r0*self.ik
-        
-        return voltage, self.soc
-    
-    def look(self, current):
-        soc = self.soc - self.time_delta/self.q*self.ik
-        irc = np.exp(-self.time_delta/self.time_constant)*self.irc + (1-np.exp(-self.time_delta/self.time_constant))*self.ik
-        ik = current
-        OCV = np.interp(soc, self.soc_curve, self.ocv_curve)
-        voltage = OCV - self.r1*irc - self.r0*ik
-        
-        return voltage, soc
     
 if __name__ == '__main__':
     pass
