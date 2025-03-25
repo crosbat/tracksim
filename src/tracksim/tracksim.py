@@ -402,8 +402,7 @@ class Traffic():
     
         """
         
-        if self.make_checkpoints:
-            make_clean_dir(self.checkpoint_dir)
+        make_clean_dir(self.checkpoint_dir)
         
         print('\nStarting simulation')
         
@@ -434,21 +433,19 @@ class Traffic():
                 pass
             
             step += 1
-            
-            if self.make_checkpoints:
                 
-                if step > 0 and step%(3600/self.time_step)==0:
-                    # For every 1 hour
+            if step > 0 and step%(3600/self.time_step)==0:
+                # For every 1 hour
+                
+                timeslot_index = int(step/(3600/self.time_step))
+                
+                for veh_id in data.keys():
+                    # Save the trip data for this vehicle in this timeslot
                     
-                    timeslot_index = int(step/(3600/self.time_step))
-                    
-                    for veh_id in data.keys():
-                        # Save the trip data for this vehicle in this timeslot
-                        
-                        with open(f'{self.checkpoint_dir}/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
-                            pickle.dump(data[veh_id], file)
-                    
-                    data = dict() # Reset data storage
+                    with open(f'{self.checkpoint_dir}/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
+                        pickle.dump(data[veh_id], file)
+                
+                data = dict() # Reset data storage
             
             if self.pbar:
                 pbar.update()
