@@ -305,7 +305,7 @@ class Traffic():
     
         """
         
-        veh_files = [file for file in os.listdir(self.checkpoint_dir) if veh_id+'_' in file] # Get all checkpoints for this vehicle
+        veh_files = [file for file in os.listdir(self.checkpoint_dir) if  veh_id == file.split('_')[0]] # Get all checkpoints for this vehicle
         veh_files.sort()
         
         with open(f'{self.checkpoint_dir}/{veh_files[0]}', 'rb') as file:
@@ -433,7 +433,7 @@ class Traffic():
                 pass
             
             step += 1
-                
+            
             if step > 0 and step%(3600/self.time_step)==0:
                 # For every 1 hour
                 
