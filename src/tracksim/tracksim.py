@@ -9,6 +9,8 @@ import libsumo as ls
 
 from tqdm import tqdm
 from multiprocessing import Pool
+from scipy.optimize import minimize
+from functools import partial
 
 # =============================================================================
 # Utility functions
@@ -101,7 +103,7 @@ def get_cell_currents_voltages(vf: np.ndarray,
         
         if charge_current_is_positive:
             
-            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000)
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power)
                  )/(-2*rT_pack) # Find necessary current for the desired power
             
             V = vT_pack + rT_pack*I # Get pack voltage
@@ -113,7 +115,7 @@ def get_cell_currents_voltages(vf: np.ndarray,
         
         else:
             
-            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000)
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
                  )/(2*rT_pack) # Find necessary current for the desired power
             V = vT_pack - rT_pack*I # Get pack voltage
             
@@ -129,7 +131,7 @@ def get_cell_currents_voltages(vf: np.ndarray,
         vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
         
         if charge_current_is_positive:
-            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power*1000)
+            I = (vT_pack-np.sqrt(vT_pack**2+4*rT_pack*desired_power)
                  )/(-2*rT_pack) # Find necessary current for the desired power
             V = vT_pack + rT_pack*I
             
@@ -140,7 +142,7 @@ def get_cell_currents_voltages(vf: np.ndarray,
             vk = vf + r0*ik # Get individual cell voltages
         
         else:
-            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power*1000)
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
                  )/(2*rT_pack) # Find necessary current for the desired power
             V = vT_pack - rT_pack*I # Get pack voltage
             
@@ -150,6 +152,64 @@ def get_cell_currents_voltages(vf: np.ndarray,
             
             vk = vf - r0*ik # Get individual cell voltages
 
+    return ik, vk, I, V
+
+def obj_func_positive_charge_current(ik : float, 
+                                     v_inst : callable,
+                                     vf : float,
+                                     desired_power : float,
+                                     Ns : int,
+                                     Np : int) -> float:
+    
+    return ((vf + v_inst(ik))*ik - desired_power/(Ns*Np))**2
+
+def obj_func_negative_charge_current(ik : float, 
+                                     v_inst : callable,
+                                     vf : float,
+                                     desired_power : float,
+                                     Ns : int) -> float:
+    
+    return ((vf - v_inst(ik))*ik - desired_power/Ns)**2
+
+def get_cell_currents_voltages_optimization(vf: np.ndarray,
+                                            v_inst : callable,
+                                            ik_init : float,
+                                            desired_power : float,
+                                            cells_are_identical: bool, 
+                                            charge_current_is_positive: bool, 
+                                            Ns: int, 
+                                            Np: int) -> tuple:
+    
+    if not cells_are_identical:
+        raise ValueError('Current-dependent b0 is currently not supported in packs with non-identical cells')
+        
+    if charge_current_is_positive:
+        
+        partial_func = partial(obj_func_positive_charge_current, 
+                               v_inst = v_inst,
+                               vf = vf,
+                               desired_power = -desired_power,
+                               Ns = Ns, Np = Np)
+        
+        ik = minimize(partial_func, ik_init).x.reshape(1,1)
+        
+        vk = vf + v_inst(ik)
+    
+    else:
+        
+        partial_func = partial(obj_func_negative_charge_current, 
+                               v_inst = v_inst,
+                               vf = vf,
+                               desired_power = desired_power,
+                               Ns = Ns)
+        
+        ik = minimize(partial_func, ik_init).x.reshape(1,1)
+        
+        vk = vf - v_inst(ik)
+    
+    I = ik*Np
+    V = vk*Ns
+    
     return ik, vk, I, V
 
 # =============================================================================
@@ -166,7 +226,8 @@ class Traffic():
                  output_dir: str ='simulated_trip_files', 
                  duration: int = 1, 
                  time_step: float = 1,
-                 record_position: bool = False, 
+                 record_position: bool = False,
+                 to_geo: bool = True,
                  record_lane: bool = False, 
                  pbar: bool = True,
                  checkpoint_dir: str = 'trip_checkpoints',
@@ -194,6 +255,10 @@ class Traffic():
             Records the x and y position in the network of each vehicle in the 
             simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        to_geo : bool, optional
+            Converts the position of the vehicle into geograpic coordinates 
+            (longitude, latitude) if True. Only used if record_position is True.
+            The default is True.
         record_lane : bool, optional
             Records the ID of the current lane in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
@@ -237,6 +302,7 @@ class Traffic():
         self.duration = duration
         self.time_step = time_step
         self.record_position = record_position
+        self.to_geo = to_geo
         self.record_lane = record_lane
         self.pbar = pbar
         self.lite_mode_ratio = lite_mode_ratio
@@ -268,9 +334,13 @@ class Traffic():
             data[veh_id]['Time [s]'] = [] # Current time in simulation [s]
             data[veh_id]['Speed [m/s]'] = [] # Speed [m/s]
             
-            if self.record_position:
+            if self.record_position and not self.to_geo:
                 data[veh_id]['x [m]'] = [] # x position
                 data[veh_id]['y [m]'] = [] # y position
+            
+            elif self.record_position and self.to_geo:
+                data[veh_id]['Longitude'] = [] # Longitude
+                data[veh_id]['Latitude'] = [] # Latitude
             
             if self.record_lane:
                 data[veh_id]['Lane ID'] = [] # Network lane id
@@ -281,8 +351,14 @@ class Traffic():
           
         if self.record_position:
             pos = ls.vehicle.getPosition(veh_id)
-            data[veh_id]['x [m]'].append(pos[0])
-            data[veh_id]['y [m]'].append(pos[1])
+            
+            if not self.to_geo:
+                data[veh_id]['x [m]'].append(pos[0])
+                data[veh_id]['y [m]'].append(pos[1])
+            else:
+                lon, lat = ls.simulation.convertGeo(*pos)
+                data[veh_id]['Longitude'].append(lon)
+                data[veh_id]['Latitude'].append(lat)
        
         if self.record_lane:
             data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id))
@@ -390,12 +466,21 @@ class Traffic():
         
         return None
 
-    def simulate_traffic(self) -> None:
+    def simulate_traffic(self, checkpoint_length = 3600) -> None:
         """
         Simulates the traffic from a SUMO config file and tracks the data for 
-        each vehicle in the simulation. The simulation saves vehicle data every 
-        hour in order to save on memory.
-    
+        each vehicle in the simulation. The simulation saves vehicle data 
+        periodically in order to save on memory.
+        
+        Parameters
+        ----------
+        checkpoint_length : int
+            Number od simulation seconds to process before saving the data as a 
+            checkpoint. For instance, if checkpoint_length = 3600, then the
+            simulation data is saved to disk every simulation hour. Reducing
+            this will save on memory usage but will increase the number of
+            checkpoints saved to disk. The default is 3600.
+        
         Returns
         -------
         None.
@@ -513,7 +598,7 @@ class Pack():
             Raised if cell_model or temperature_model are not dicts or array of
             dicts.
         KeyError
-            Raised if the 'Model Type' value is not supported.
+            Raised if the 'Model type' value is not supported.
 
         Returns
         -------
@@ -531,14 +616,14 @@ class Pack():
         
         self.cell_model_is_dynamic = False
         
-        if 'ECM' in self.cell_model['Model Type']:
+        if 'ECM' in self.cell_model['Model type']:
             if self.cell_model_is_array:
-                self.cell_model_is_dynamic = callable(self.cell_model[0,0]['R0'])
+                self.cell_model_is_dynamic = callable(self.cell_model[0,0]['R0 [Ohm]'])
             
             else:
-                self.cell_model_is_dynamic = callable(self.cell_model['R0'])
+                self.cell_model_is_dynamic = callable(self.cell_model['R0 [Ohm]'])
         
-        elif 'ARX' in self.cell_model['Model Type']:
+        elif 'LPV' in self.cell_model['Model type']:
             if self.cell_model_is_array:
                 self.cell_model_is_dynamic = callable(self.cell_model[0,0]['b0'])
             
@@ -553,8 +638,8 @@ class Pack():
         if (temperature_model is not None) and (not self.temperature_model_is_array) and (not isinstance(self.temperature_model, dict)):
             raise ValueError('Please give the temperature model as either a dictionary or an array of dictionaries. See tracksim.temperature_models for a selection of compatible models.')
         
-        self.Ns = self.pack_model['No. Cells Series']*self.pack_model['No. Modules']
-        self.Np = self.pack_model['No. Cells Parallel']
+        self.Ns = self.pack_model['Number of cells in series']*self.pack_model['Number of modules']
+        self.Np = self.pack_model['Number of cells in parallel']
         
         self.n_cells = self.Ns*self.Np
         
@@ -567,26 +652,26 @@ class Pack():
             for i in range(self.Ns):
                 for j in range(self.Np):
                     cell_masses[i,j] = self.cell_model[i,j]['Mass [kg]']
-                    cell_nominal_charge_capacities[i,j] = self.cell_model[i,j]['Nominal Capacity [Ah]']
-                    cell_nominal_voltages[i,j] = self.cell_model[i,j]['Nominal Voltage [V]']
+                    cell_nominal_charge_capacities[i,j] = self.cell_model[i,j]['Nominal capacity [As]']
+                    cell_nominal_voltages[i,j] = self.cell_model[i,j]['Nominal voltage [V]']
             
-            self.mass = np.sum(cell_masses)*1/(1-self.pack_model['Battery Module Overhead'])*1/(1-self.pack_model['Battery Pack Overhead'])
+            self.mass = np.sum(cell_masses)*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
             self.nominal_charge_capacity = np.min(np.sum(cell_nominal_charge_capacities, axis=1))
             self.nominal_energy_capacity = np.sum(np.mean(cell_nominal_voltages, axis=1))*self.nominal_charge_capacity
             
         else:
-            self.mass = self.n_cells*self.cell_model['Mass [kg]']*1/(1-self.pack_model['Battery Module Overhead'])*1/(1-self.pack_model['Battery Pack Overhead'])
-            self.nominal_charge_capacity = self.Np * self.cell_model['Nominal Capacity [Ah]']
-            self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal Voltage [V]'] # Wh
+            self.mass = self.n_cells*self.cell_model['Mass [kg]']*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
+            self.nominal_charge_capacity = self.Np * self.cell_model['Nominal capacity [As]']
+            self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal voltage [V]']/3600 # Wh
         
         if self.nominal_energy_capacity < 20000:
-            warnings.warn(f"The nominal energy capacity for this pack is {self.nominal_energy_capacity/1000:.2f} kWh, which is considered low for typical EVs. This may have adverse effects in the simulation if the voltage of the cells goes outside the normal bounds. To increase the nominal capacity, please consider increasing the number of cells by changing the 'No. Cells Series' or 'No. Cells Parallel' values in the pack model.")
+            warnings.warn(f"The nominal energy capacity for this pack is {self.nominal_energy_capacity/1000:.2f} kWh, which is considered low for typical EVs. This may have adverse effects in the simulation if the voltage of the cells goes outside the normal bounds. To increase the nominal capacity, please consider increasing the number of cells by changing the 'Number of cells in series' or 'Number of cells in parallel' values in the pack model.")
         
-        self.efficiency = self.pack_model['Battery Pack Efficiency']
+        self.efficiency = self.pack_model['Battery pack efficiency']
         
         self.initial_conditions = None
         self.simulation_results = None
-        self.charge_current_is_positive = self.cell_model['Positive Charging Current']
+        self.charge_current_is_positive = self.cell_model['Positive charging current']
         
         return None
 
@@ -619,14 +704,14 @@ class Pack():
         None
 
         """
-        if 'ECM' in self.cell_model['Model Type']:
+        if 'ECM' in self.cell_model['Model type']:
             self.set_initial_conditions_ECM(soc=soc, 
                                             irc=irc, 
                                             cell_temp=cell_temp, 
                                             coolant_temp=coolant_temp)
             
-        elif 'ARX' in self.cell_model['Model Type']:
-            self.set_initial_conditions_ARX(soc=soc, 
+        elif 'LPV' in self.cell_model['Model type']:
+            self.set_initial_conditions_LPV(soc=soc, 
                                             cell_temp=cell_temp, 
                                             coolant_temp=coolant_temp)
             
@@ -690,31 +775,31 @@ class Pack():
             raise ValueError("Please provide 'soc' as either an int, float, or ndarray.")
         
         if isinstance(irc, (int, float)):
-            self.initial_conditions['rc_current'] = np.ones(shape=(Ns,Np))*irc
+            self.initial_conditions['RC current [A]'] = np.ones(shape=(Ns,Np))*irc
         elif isinstance(soc, np.ndarray):
-            self.initial_conditions['rc_current'] = irc
+            self.initial_conditions['RC current [A]'] = irc
         else:
             raise ValueError("Please provide 'irc' as either an int, float, or ndarray.")
         
         if isinstance(cell_temp, (int, float)):
-            self.initial_conditions['cell_temp'] = np.ones(shape=(Ns,Np))*cell_temp
+            self.initial_conditions['Cell temperature [C]'] = np.ones(shape=(Ns,Np))*cell_temp
         elif isinstance(cell_temp, np.ndarray):
-            self.initial_conditions['cell_temp'] = cell_temp
+            self.initial_conditions['Cell temperature [C]'] = cell_temp
         else:
             raise ValueError("Please provide 'cell_temp' as either an int, float or ndarray.")
         
         if isinstance(coolant_temp, (int, float)):
-            self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
+            self.initial_conditions['Coolant temperature [C]'] = np.ones(shape=(Ns,Np))*coolant_temp
         else:
             raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
 
     def simulate_pack(self, desired_power, time_delta):
         
-        if 'ECM' in self.cell_model['Model Type']:
+        if 'ECM' in self.cell_model['Model type']:
             self.simulate_pack_ECM(desired_power, time_delta)
             
-        elif 'ARX' in self.cell_model['Model Type']:
-            self.simulate_pack_ARX(desired_power, time_delta)
+        elif 'LPV' in self.cell_model['Model type']:
+            self.simulate_pack_LPV(desired_power, time_delta)
             
         else:
             raise KeyError('Please check model type')
@@ -755,29 +840,29 @@ class Pack():
         self.simulation_results = dict()
         
         # Set up storage
-        self.simulation_results['time'] = np.arange(sim_len)*time_delta # s
-        self.simulation_results['pack'] = dict()
-        self.simulation_results['pack']['current'] = np.zeros(sim_len) # A
-        self.simulation_results['pack']['voltage'] = np.zeros(sim_len) # V
-        self.simulation_results['pack']['min_soc'] = np.zeros(sim_len) # Minimum SOC of all cells
-        self.simulation_results['pack']['max_soc'] = np.zeros(sim_len) # Maximum SOC of all cells
-        self.simulation_results['pack']['avg_soc'] = np.zeros(sim_len) # Average SOC of all cells
-        self.simulation_results['pack']['min_temp'] = np.zeros(sim_len) # Minimum temperature of all cells
-        self.simulation_results['pack']['max_temp'] = np.zeros(sim_len) # Maximum temperature of all cells
-        self.simulation_results['pack']['avg_temp'] = np.zeros(sim_len) # Average temperature of all cells
+        self.simulation_results['Time [s]'] = np.arange(sim_len)*time_delta # s
+        self.simulation_results['Pack'] = dict()
+        self.simulation_results['Pack']['Current [A]'] = np.zeros(sim_len) # A
+        self.simulation_results['Pack']['Voltage [V]'] = np.zeros(sim_len) # V
+        self.simulation_results['Pack']['Min SOC'] = np.zeros(sim_len) # Minimum SOC of all cells
+        self.simulation_results['Pack']['Max SOC'] = np.zeros(sim_len) # Maximum SOC of all cells
+        self.simulation_results['Pack']['Avg SOC'] = np.zeros(sim_len) # Average SOC of all cells
+        self.simulation_results['Pack']['Min temperature [C]'] = np.zeros(sim_len) # Minimum temperature of all cells
+        self.simulation_results['Pack']['Max temperature [C]'] = np.zeros(sim_len) # Maximum temperature of all cells
+        self.simulation_results['Pack']['Avg temperature [C]'] = np.zeros(sim_len) # Average temperature of all cells
         for i in range(Ns):
             for j in range(Np):
-                self.simulation_results[f'cell_{i}-{j}'] = dict()
-                self.simulation_results[f'cell_{i}-{j}']['R0'] = np.zeros(sim_len) # Ohm
-                self.simulation_results[f'cell_{i}-{j}']['current'] = np.zeros(sim_len) # A
-                self.simulation_results[f'cell_{i}-{j}']['voltage'] = np.zeros(sim_len) # V
-                self.simulation_results[f'cell_{i}-{j}']['soc'] = np.zeros(sim_len)
-                self.simulation_results[f'cell_{i}-{j}']['ocv'] = np.zeros(sim_len) # V
-                self.simulation_results[f'cell_{i}-{j}']['temp'] = np.zeros(sim_len) # Deg C
+                self.simulation_results[f'Cell {i}-{j}'] = dict()
+                self.simulation_results[f'Cell {i}-{j}']['R0 [Ohm]'] = np.zeros(sim_len) # Ohm
+                self.simulation_results[f'Cell {i}-{j}']['Current [A]'] = np.zeros(sim_len) # A
+                self.simulation_results[f'Cell {i}-{j}']['Voltage [V]'] = np.zeros(sim_len) # V
+                self.simulation_results[f'Cell {i}-{j}']['SOC'] = np.zeros(sim_len)
+                self.simulation_results[f'Cell {i}-{j}']['OCV [V]'] = np.zeros(sim_len) # V
+                self.simulation_results[f'Cell {i}-{j}']['Temperature [C]'] = np.zeros(sim_len) # Deg C
                 for l in range(num_rc_pairs):
-                    self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'] = np.zeros(sim_len) # A
-                    self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'] = np.zeros(sim_len) # Ohm
-                    self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'] = np.zeros(sim_len) # F
+                    self.simulation_results[f'Cell {i}-{j}'][f'RC{l+1} current [A]'] = np.zeros(sim_len) # A
+                    self.simulation_results[f'Cell {i}-{j}'][f'R{l+1} [Ohm]'] = np.zeros(sim_len) # Ohm
+                    self.simulation_results[f'Cell {i}-{j}'][f'C{l+1} [F]'] = np.zeros(sim_len) # F
 
     def simulate_pack_ECM(self, desired_power, time_delta):
         """
@@ -786,7 +871,7 @@ class Pack():
         Parameters
         ----------
         desired_power : iterable
-            Profile of the demanded power in kW.
+            Profile of the demanded power in W.
         time_delta : float
             Length of time between samples in seconds.
 
@@ -812,17 +897,17 @@ class Pack():
         Np = self.Np
         
         if self.cell_model_is_array:
-            num_rc_pairs = self.cell_model[0,0]['No. RC Pairs']
+            num_rc_pairs = self.cell_model[0,0]['Number of RC pairs']
         else:
-            num_rc_pairs = self.cell_model['No. RC Pairs']
+            num_rc_pairs = self.cell_model['Number of RC pairs']
             
         sim_len = len(desired_power)
         
         # Initialize cell states
         z = self.initial_conditions['SOC']
-        irc = self.initial_conditions['rc_current']
-        T = self.initial_conditions['cell_temp']
-        Tf = self.initial_conditions['coolant_temp']
+        irc = self.initial_conditions['RC current [A]']
+        T = self.initial_conditions['Cell temperature [C]']
+        Tf = self.initial_conditions['Coolant temperature [C]']
         
         cells_are_identical = False
         if not self.cell_model_is_array:
@@ -854,14 +939,14 @@ class Pack():
                 for i in range(Ns):
                     for j in range(Np):
                         
-                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
-                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
-                        r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j])
-                        r0[i,j] += 2*self.cell_model[i,j]['Tab Resistance [Ohm]']
+                        q[i,j] = self.cell_model[i,j]['Capacity [As]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic efficiency']
+                        r0[i,j] = self.cell_model[i,j]['R0 [Ohm]'](z[i,j], T[i,j])
+                        r0[i,j] += 2*self.cell_model[i,j]['Tab resistance [Ohm]']
                         
                         for l in range(num_rc_pairs):
-                            r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j])
-                            c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j])
+                            r[l,i,j] = self.cell_model[i,j][f'R{l+1} [Ohm]'](z[i,j], T[i,j])
+                            c[l,i,j] = self.cell_model[i,j][f'C{l+1} [F]'](z[i,j], T[i,j])
                             rc[l,i,j] = np.exp(-time_delta/np.abs(r[l,i,j]*c[l,i,j]))
             
             else:
@@ -869,47 +954,47 @@ class Pack():
                 for i in range(Ns):
                     for j in range(Np):
                         
-                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
-                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
-                        r0[i,j] = self.cell_model[i,j]['R0']
-                        r0[i,j] += 2*self.cell_model['Tab Resistance [Ohm]']
+                        q[i,j] = self.cell_model[i,j]['Capacity [As]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic efficiency']
+                        r0[i,j] = self.cell_model[i,j]['R0 [Ohm]']
+                        r0[i,j] += 2*self.cell_model['Tab resistance [Ohm]']
                         
                         for l in range(num_rc_pairs):
-                            r[l,i,j] = self.cell_model[i,j][f'R{l+1}']
-                            c[l,i,j] = self.cell_model[i,j][f'C{l+1}']
+                            r[l,i,j] = self.cell_model[i,j][f'R{l+1} [Ohm]']
+                            c[l,i,j] = self.cell_model[i,j][f'C{l+1} [F]']
                             rc[l,i,j] = np.exp(-time_delta/np.abs(r[l,i,j]*c[l,i,j]))
                 
         else:
             
-            q = np.ones(shape=(Ns,Np))*self.cell_model['Capacity [Ah]']
-            eta = np.ones(shape=(Ns,Np))*self.cell_model['Coulombic Efficiency']
+            q = np.ones(shape=(Ns,Np))*self.cell_model['Capacity [As]']
+            eta = np.ones(shape=(Ns,Np))*self.cell_model['Coulombic efficiency']
             
             if self.cell_model_is_dynamic:
                 
-                r0 = self.cell_model['R0'](z, T)
-                r0 += 2*np.ones(shape=(Ns,Np))*self.cell_model['Tab Resistance [Ohm]'] # Add tab resistance for each cell
+                r0 = self.cell_model['R0 [Ohm]'](z, T)
+                r0 += 2*np.ones(shape=(Ns,Np))*self.cell_model['Tab resistance [Ohm]'] # Add tab resistance for each cell
                 
                 r = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 c = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 rc = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 
                 for l in range(num_rc_pairs):
-                    r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
-                    c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
+                    r[l,:,:] = self.cell_model[f'R{l+1} [Ohm]'](z, T)
+                    c[l,:,:] = self.cell_model[f'C{l+1} [F]'](z, T)
                     rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             else:
                 
-                r0 = np.ones(shape=(Ns,Np))*self.cell_model['R0']
-                r0 += 2*np.ones(shape=(Ns,Np))*self.cell_model['Tab Resistance [Ohm]'] # Add tab resistance for each cell
+                r0 = np.ones(shape=(Ns,Np))*self.cell_model['R0 [Ohm]']
+                r0 += 2*np.ones(shape=(Ns,Np))*self.cell_model['Tab resistance [Ohm]'] # Add tab resistance for each cell
                 
                 r = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 c = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 rc = np.zeros(shape=(num_rc_pairs, Ns, Np))
                 
                 for l in range(num_rc_pairs):
-                    r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1}']
-                    c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1}']
+                    r[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'R{l+1} [Ohm]']
+                    c[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'C{l+1} [F]']
                     rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
         
         if self.temperature_model is not None:
@@ -925,33 +1010,33 @@ class Pack():
                 
                     for i in range(Ns):
                         for j in range(Np):
-                            h[i,j] = self.temperature_model[i,j]['Equivalent Convective Heat Transfer Coefficient [W/(m2K)]']
-                            A[i,j] = self.cell_model[i,j]['Surface Area [m2]']
+                            h[i,j] = self.temperature_model[i,j]['Equivalent convective heat transfer coefficient [W/(m2K)]']
+                            A[i,j] = self.cell_model[i,j]['Surface area [m2]']
                             m[i,j] = self.cell_model[i,j]['Mass [kg]']*1000 # g
-                            Cp[i,j] = self.temperature_model[i,j]['Specific Heat Capacity [J/(kgK)]']*1000 # J/gK
+                            Cp[i,j] = self.temperature_model[i,j]['Specific heat capacity [J/(kgK)]']*1000 # J/gK
                 else:
                     for i in range(Ns):
                         for j in range(Np):
-                            h[i,j] = self.temperature_model[i,j]['Equivalent Convective Heat Transfer Coefficient [W/(m2K)]']
-                            A[i,j] = self.cell_model['Surface Area [m2]']
+                            h[i,j] = self.temperature_model[i,j]['Equivalent convective heat transfer coefficient [W/(m2K)]']
+                            A[i,j] = self.cell_model['Surface area [m2]']
                             m[i,j] = self.cell_model['Mass [kg]']*1000 # g
-                            Cp[i,j] = self.temperature_model[i,j]['Specific Heat Capacity [J/(kgK)]']*1000 # J/gK
+                            Cp[i,j] = self.temperature_model[i,j]['Specific heat capacity [J/(kgK)]']*1000 # J/gK
                         
             else:
                 
                 if self.cell_model_is_array:
                     for i in range(Ns):
                         for j in range(Np):
-                            h[i,j] = self.temperature_model['Equivalent Convective Heat Transfer Coefficient [W/(m2K)]']
-                            A[i,j] = self.cell_model[i,j]['Surface Area [m2]']
+                            h[i,j] = self.temperature_model['Equivalent convective heat transfer coefficient [W/(m2K)]']
+                            A[i,j] = self.cell_model[i,j]['Surface area [m2]']
                             m[i,j] = self.cell_model[i,j]['Mass [kg]']*1000 # g
-                            Cp[i,j] = self.temperature_model['Specific Heat Capacity [J/(kgK)]']*1000 # J/gK
+                            Cp[i,j] = self.temperature_model['Specific heat capacity [J/(kgK)]']*1000 # J/gK
                 
                 else:
-                    h = np.ones(shape=(Ns,Np))*self.temperature_model['Equivalent Convective Heat Transfer Coefficient [W/(m2K)]']
-                    A = np.ones(shape=(Ns,Np))*self.cell_model['Surface Area [m2]']
+                    h = np.ones(shape=(Ns,Np))*self.temperature_model['Equivalent convective heat transfer coefficient [W/(m2K)]']
+                    A = np.ones(shape=(Ns,Np))*self.cell_model['Surface area [m2]']
                     m = np.ones(shape=(Ns,Np))*self.cell_model['Mass [kg]']*1000 # g
-                    Cp = np.ones(shape=(Ns,Np))*self.temperature_model['Specific Heat Capacity [J/(kgK)]']*1000 # J/gK
+                    Cp = np.ones(shape=(Ns,Np))*self.temperature_model['Specific heat capacity [J/(kgK)]']*1000 # J/gK
         
             e = np.exp((-h*A*time_delta)/m*Cp)
         
@@ -963,23 +1048,23 @@ class Pack():
                 ocv = np.zeros(shape=(Ns,Np))
                 for i in range(Ns):
                     for j in range(Np):
-                        ocv[i,j] = self.cell_model[i,j]['OCV'](z[i,j], T[i,j])
+                        ocv[i,j] = self.cell_model[i,j]['OCV [V]'](z[i,j], T[i,j])
             else:
-                ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
+                ocv = self.cell_model['OCV [V]'](z,T) # Get OCV for each cell
             
             if self.charge_current_is_positive:
                 
                 v_cells = ocv + np.sum(r*irc, axis=0) # Add diffusion voltages
                 ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik>0] = ik[ik>0]*eta[ik>0] # Multiply by eta for cells where we are charging
-                z += (time_delta/(3600*q))*ik # Update SOC
+                z += (time_delta/q)*ik # Update SOC
                 
             else:
                 
                 v_cells = ocv - np.sum(r*irc, axis=0) # Add diffusion voltages
                 ik, vk, I, V = get_cell_currents_voltages(v_cells, r0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik[ik<0] = ik[ik<0]*eta[ik<0] # Multiply by eta for cells where we are charging
-                z -= (time_delta/(3600*q))*ik # Update SOC
+                z -= (time_delta/q)*ik # Update SOC
             
             irc = rc*irc + (1-rc)*np.tile(ik, (num_rc_pairs,1,1)) # Update RC resistor currents
             
@@ -992,10 +1077,10 @@ class Pack():
 
                     for i in range(Ns):
                         for j in range(Np):
-                            dOCV_dT[i,j] = self.temperature_model[i,j]['Entropic Heat Coefficient'](z[i,j])
+                            dOCV_dT[i,j] = self.temperature_model[i,j]['Entropic heat coefficient'](z[i,j])
                 
                 else:
-                    dOCV_dT = self.temperature_model['Entropic Heat Coefficient'](z)
+                    dOCV_dT = self.temperature_model['Entropic heat coefficient'](z)
                 
                 if self.charge_current_is_positive:
                     Qk = ik**2*r0 - ik*np.sum(irc*r, axis=0) - ik*(T+273.15)*dOCV_dT
@@ -1011,52 +1096,52 @@ class Pack():
 
                     for i in range(Ns):
                         for j in range(Np):
-                            r0[i,j] = self.cell_model[i,j]['R0'](z[i,j], T[i,j])
+                            r0[i,j] = self.cell_model[i,j]['R0 [Ohm]'](z[i,j], T[i,j])
                             
                             for l in range(num_rc_pairs):
-                                r[l,i,j] = self.cell_model[i,j][f'R{l+1}'](z[i,j], T[i,j])
-                                c[l,i,j] = self.cell_model[i,j][f'C{l+1}'](z[i,j], T[i,j])
+                                r[l,i,j] = self.cell_model[i,j][f'R{l+1} [Ohm]'](z[i,j], T[i,j])
+                                c[l,i,j] = self.cell_model[i,j][f'C{l+1} [F]'](z[i,j], T[i,j])
                     
                     for l in range(num_rc_pairs):
                         rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
                 
                 else:
-                    r0 = self.cell_model['R0'](z, T)
+                    r0 = self.cell_model['R0 [Ohm]'](z, T)
                     for l in range(num_rc_pairs):
-                        r[l,:,:] = self.cell_model[f'R{l+1}'](z, T)
-                        c[l,:,:] = self.cell_model[f'C{l+1}'](z, T)
+                        r[l,:,:] = self.cell_model[f'R{l+1} [Ohm]'](z, T)
+                        c[l,:,:] = self.cell_model[f'C{l+1} [F]'](z, T)
                         rc[l,:,:] = np.exp(-time_delta/np.abs(r[l,:,:]*c[l,:,:]))
             
             # Store measurements
-            self.simulation_results['pack']['current'][k] = I
-            self.simulation_results['pack']['voltage'][k] = V 
-            self.simulation_results['pack']['min_soc'][k] = np.min(z)
-            self.simulation_results['pack']['max_soc'][k] = np.max(z)
-            self.simulation_results['pack']['avg_soc'][k] = np.mean(z)
-            self.simulation_results['pack']['min_temp'][k] = np.min(T)
-            self.simulation_results['pack']['max_temp'][k] = np.max(T)
-            self.simulation_results['pack']['avg_temp'][k] = np.mean(T)
+            self.simulation_results['Pack']['Current [A]'][k] = I
+            self.simulation_results['Pack']['Voltage [V]'][k] = V 
+            self.simulation_results['Pack']['Min SOC'][k] = np.min(z)
+            self.simulation_results['Pack']['Max SOC'][k] = np.max(z)
+            self.simulation_results['Pack']['Avg SOC'][k] = np.mean(z)
+            self.simulation_results['Pack']['Min temperature [C]'][k] = np.min(T)
+            self.simulation_results['Pack']['Max temperature [C]'][k] = np.max(T)
+            self.simulation_results['Pack']['Avg temperature [C]'][k] = np.mean(T)
             
             for i in range(Ns):
                 for j in range(Np):
-                    self.simulation_results[f'cell_{i}-{j}']['R0'][k] = r0[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i, j]
-                    self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['ocv'][k] = ocv[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['R0 [Ohm]'][k] = r0[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Current [A]'][k] = ik[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Voltage [V]'][k] = vk[i, j]
+                    self.simulation_results[f'Cell {i}-{j}']['SOC'][k] = z[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['OCV [V]'][k] = ocv[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Temperature [C]'][k] = T[i,j]
                     for l in range(num_rc_pairs):
-                        self.simulation_results[f'cell_{i}-{j}'][f'current_rc{l+1}'][k] = irc[l,i,j]
-                        self.simulation_results[f'cell_{i}-{j}'][f'R{l+1}'][k] = r[l,i,j]
-                        self.simulation_results[f'cell_{i}-{j}'][f'C{l+1}'][k] = c[l,i,j]
+                        self.simulation_results[f'Cell {i}-{j}'][f'RC{l+1} current [A]'][k] = irc[l,i,j]
+                        self.simulation_results[f'Cell {i}-{j}'][f'R{l+1} [Ohm]'][k] = r[l,i,j]
+                        self.simulation_results[f'Cell {i}-{j}'][f'C{l+1} [F]'][k] = c[l,i,j]
 
-    def set_initial_conditions_ARX(self, 
+    def set_initial_conditions_LPV(self, 
                                    soc=0.8, 
                                    cell_temp=25, 
                                    coolant_temp=25):
         """
         Sets the initial conditions for the battery pack before the simulation, 
-        assuming an Autoregressive with exogenous inputs (ARX) model.
+        assuming an Autoregressive with exogenous inputs (LPV) model.
 
         Parameters
         ----------
@@ -1097,21 +1182,21 @@ class Pack():
             raise ValueError("Please provide 'soc' as either an int, float, or ndarray.")
         
         if isinstance(cell_temp, (int, float)):
-            self.initial_conditions['cell_temp'] = np.ones(shape=(Ns,Np))*cell_temp
+            self.initial_conditions['Cell temperature [C]'] = np.ones(shape=(Ns,Np))*cell_temp
         elif isinstance(cell_temp, np.ndarray):
-            self.initial_conditions['cell_temp'] = cell_temp
+            self.initial_conditions['Cell temperature [C]'] = cell_temp
         else:
             raise ValueError("Please provide 'cell_temp' as either an int, float or ndarray.")
         
         if isinstance(coolant_temp, (int, float)):
-            self.initial_conditions['coolant_temp'] = np.ones(shape=(Ns,Np))*coolant_temp
+            self.initial_conditions['Coolant temperature [C]'] = np.ones(shape=(Ns,Np))*coolant_temp
         else:
             raise ValueError("Please provide 'coolant_temp' as either an int or a float.")
 
-    def initialize_simulation_ARX(self, sim_len, time_delta, model_order, cells_are_identical):
+    def initialize_simulation_LPV(self, sim_len, time_delta, model_order, cells_are_identical):
         """
         Initializes the storage for the simulation results. This method is only
-        intended to be used by the simulate_pack_ARX method and not on its own.
+        intended to be used by the simulate_pack_LPV method and not on its own.
 
         Parameters
         ----------
@@ -1137,29 +1222,29 @@ class Pack():
         
         # Set up storage
         self.simulation_results['time'] = np.arange(sim_len)*time_delta # s
-        self.simulation_results['pack'] = dict()
-        self.simulation_results['pack']['current'] = np.zeros(sim_len) # A
-        self.simulation_results['pack']['voltage'] = np.zeros(sim_len) # V
-        self.simulation_results['pack']['min_soc'] = np.zeros(sim_len) # Minimum SOC of all cells
-        self.simulation_results['pack']['max_soc'] = np.zeros(sim_len) # Maximum SOC of all cells
-        self.simulation_results['pack']['avg_soc'] = np.zeros(sim_len) # Average SOC of all cells
-        self.simulation_results['pack']['min_temp'] = np.zeros(sim_len) # Minimum temperature of all cells
-        self.simulation_results['pack']['max_temp'] = np.zeros(sim_len) # Maximum temperature of all cells
-        self.simulation_results['pack']['avg_temp'] = np.zeros(sim_len) # Average temperature of all cells
+        self.simulation_results['Pack'] = dict()
+        self.simulation_results['Pack']['Current [A]'] = np.zeros(sim_len) # A
+        self.simulation_results['Pack']['Voltage [V]'] = np.zeros(sim_len) # V
+        self.simulation_results['Pack']['Min SOC'] = np.zeros(sim_len) # Minimum SOC of all cells
+        self.simulation_results['Pack']['Max SOC'] = np.zeros(sim_len) # Maximum SOC of all cells
+        self.simulation_results['Pack']['Avg SOC'] = np.zeros(sim_len) # Average SOC of all cells
+        self.simulation_results['Pack']['Min temperature [C]'] = np.zeros(sim_len) # Minimum temperature of all cells
+        self.simulation_results['Pack']['Max temperature [C]'] = np.zeros(sim_len) # Maximum temperature of all cells
+        self.simulation_results['Pack']['Avg temperature [C]'] = np.zeros(sim_len) # Average temperature of all cells
         for i in range(Ns):
             for j in range(Np):
-                self.simulation_results[f'cell_{i}-{j}'] = dict()
-                self.simulation_results[f'cell_{i}-{j}']['current'] = np.zeros(sim_len) # A
-                self.simulation_results[f'cell_{i}-{j}']['voltage'] = np.zeros(sim_len) # V
-                self.simulation_results[f'cell_{i}-{j}']['soc'] = np.zeros(sim_len)
-                self.simulation_results[f'cell_{i}-{j}']['ocv'] = np.zeros(sim_len)
-                self.simulation_results[f'cell_{i}-{j}']['temp'] = np.zeros(sim_len) # Deg C
-                self.simulation_results[f'cell_{i}-{j}']['b0'] = np.zeros(sim_len)
+                self.simulation_results[f'Cell {i}-{j}'] = dict()
+                self.simulation_results[f'Cell {i}-{j}']['Current [A]'] = np.zeros(sim_len) # A
+                self.simulation_results[f'Cell {i}-{j}']['Voltage [V]'] = np.zeros(sim_len) # V
+                self.simulation_results[f'Cell {i}-{j}']['SOC'] = np.zeros(sim_len)
+                self.simulation_results[f'Cell {i}-{j}']['OCV [V]'] = np.zeros(sim_len)
+                self.simulation_results[f'Cell {i}-{j}']['Temperature [C]'] = np.zeros(sim_len) # Deg C
+                self.simulation_results[f'Cell {i}-{j}']['b0'] = np.zeros(sim_len)
                 for l in range(model_order):
-                    self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'] = np.zeros(sim_len)
-                    self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'] = np.zeros(sim_len)
+                    self.simulation_results[f'Cell {i}-{j}'][f'a{l+1}'] = np.zeros(sim_len)
+                    self.simulation_results[f'Cell {i}-{j}'][f'b{l+1}'] = np.zeros(sim_len)
 
-    def simulate_pack_ARX(self, 
+    def simulate_pack_LPV(self, 
                           desired_power, 
                           time_delta : float):
         """
@@ -1168,7 +1253,7 @@ class Pack():
         Parameters
         ----------
         desired_power : iterable
-            Profile of the demanded power in kW.
+            Profile of the demanded power in W.
         time_delta : float
             Length of time between samples in seconds.
 
@@ -1186,7 +1271,7 @@ class Pack():
         
         if self.initial_conditions is None:
             print('No initial conditions set. Initializing with default values.')
-            self.set_initial_conditions_ARX()
+            self.set_initial_conditions_LPV()
         
         # Initialize temporary variables
         
@@ -1194,15 +1279,15 @@ class Pack():
         Np = self.Np
         
         if self.cell_model_is_array:
-            model_order = self.cell_model[0,0]['Model Order']
+            model_order = self.cell_model[0,0]['Model order']
         else:
-            model_order = self.cell_model['Model Order']
+            model_order = self.cell_model['Model order']
         
         sim_len = len(desired_power)
         
         # Initialize cell states
         z = self.initial_conditions['SOC']
-        T = self.initial_conditions['cell_temp'] # Celsius
+        T = self.initial_conditions['Cell temperature [C]'] # Celsius
         
         cells_are_identical = False
         if not self.cell_model_is_array:
@@ -1216,6 +1301,15 @@ class Pack():
                 z = z[0,0].reshape(1,1)
                 T = T[0,0].reshape(1,1)
         
+        b0_depends_on_current = False
+        if not self.cell_model_is_array:
+            test_currents = np.linspace(-10, 10, 5)
+            b0_values = self.cell_model['b0'](0.5, 25, test_currents)
+            
+            if not isinstance(b0_values, float):
+                if not np.all(b0_values == b0_values[0]):
+                    b0_depends_on_current = True
+            
         # Initialize cell parameters
         
         q = np.zeros(shape=(Ns,Np)) # Ns x Np
@@ -1226,7 +1320,7 @@ class Pack():
         
         # Initialize matrices for storing history values
         
-        v_hist = np.ones(shape=(model_order, Ns, Np))*self.cell_model['OCV'](z, T)
+        v_hist = np.ones(shape=(model_order, Ns, Np))*self.cell_model['OCV [V]'](z, T)
         ocv_hist = v_hist.copy()
         i_hist = np.zeros(shape=(model_order, Ns, Np))
         T_hist = np.ones(shape=(model_order, Ns, Np))*T
@@ -1239,21 +1333,21 @@ class Pack():
                 for i in range(Ns):
                     for j in range(Np):
                         
-                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
-                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
+                        q[i,j] = self.cell_model[i,j]['Capacity [As]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic efficiency']
                         b0[i,j] = self.cell_model[i,j]['b0'](z[i,j], T[i,j])
                         
                         for l in range(model_order):
-                            a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
-                            b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+                            a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j], i_hist[l,i,j])
+                            b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j], i_hist[l,i,j])
             
             else:
                 
                 for i in range(Ns):
                     for j in range(Np):
                         
-                        q[i,j] = self.cell_model[i,j]['Capacity [Ah]']
-                        eta[i,j] = self.cell_model[i,j]['Coulombic Efficiency']
+                        q[i,j] = self.cell_model[i,j]['Capacity [As]']
+                        eta[i,j] = self.cell_model[i,j]['Coulombic efficiency']
                         b0[i,j] = self.cell_model[i,j]['b0']
                         
                         for l in range(model_order):
@@ -1262,16 +1356,16 @@ class Pack():
                 
         else:
             
-            q = np.ones(shape=(Ns,Np))*self.cell_model['Capacity [Ah]']
-            eta = np.ones(shape=(Ns,Np))*self.cell_model['Coulombic Efficiency']
+            q = np.ones(shape=(Ns,Np))*self.cell_model['Capacity [As]']
+            eta = np.ones(shape=(Ns,Np))*self.cell_model['Coulombic efficiency']
             
             if self.cell_model_is_dynamic:
                 
                 b0 = self.cell_model['b0'](z, T)
                 
                 for l in range(model_order):
-                    a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist[l,:,:], T_hist[l,:,:])
-                    b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist[l,:,:], T_hist[l,:,:])
+                    a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist[l,:,:], T_hist[l,:,:], i_hist[l,:,:])
+                    b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist[l,:,:], T_hist[l,:,:], i_hist[l,:,:])
                   
             else:
                 
@@ -1281,7 +1375,7 @@ class Pack():
                     a[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'a{l+1}']
                     b[l,:,:] = np.ones(shape=(Ns,Np))*self.cell_model[f'b{l+1}']
         
-        self.initialize_simulation_ARX(sim_len, time_delta, model_order, cells_are_identical) # Initialize storage
+        self.initialize_simulation_LPV(sim_len, time_delta, model_order, cells_are_identical) # Initialize storage
         
         for k in range(sim_len):
             
@@ -1291,28 +1385,52 @@ class Pack():
                 ocv = np.zeros(shape=(Ns,Np))
                 for i in range(Ns):
                     for j in range(Np):
-                        ocv[i,j] = self.cell_model[i,j]['OCV'](z[i,j], T[i,j])
+                        ocv[i,j] = self.cell_model[i,j]['OCV [V]'](z[i,j], T[i,j])
                         
             else:
-                ocv = self.cell_model['OCV'](z,T) # Get OCV for each cell
+                ocv = self.cell_model['OCV [V]'](z,T) # Get OCV for each cell
             
             z_old = z.copy() # Save soc_k for later storing
             
             v_cells = np.sum(a*(v_hist-ocv_hist) + b*i_hist, axis=0) + ocv # Get Vf
             
+            if not b0_depends_on_current:
+                # Calculate cell currents and voltages using Thevenin modeling
+                
+                ik, vk, I, V = get_cell_currents_voltages(v_cells, b0, 
+                                                          desired_power[k], 
+                                                          cells_are_identical, 
+                                                          self.charge_current_is_positive, 
+                                                          self.Ns, self.Np)
+            
+            else:
+                # Calculate cell currents and voltages using optimization
+                
+                v_inst = lambda x : self.cell_model['b0'](SOC=z, T=T, I=x)*x
+                
+                ik, vk, I, V = get_cell_currents_voltages_optimization(v_cells, 
+                                                                       v_inst,
+                                                                       i_hist[0,0,0],
+                                                                       desired_power[k], 
+                                                                       cells_are_identical, 
+                                                                       self.charge_current_is_positive, 
+                                                                       self.Ns, self.Np)
+                
+            
+            # Update dynamics    
+            
             if self.charge_current_is_positive:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, b0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik_eta_corrected = ik.copy()
                 ik_eta_corrected[ik_eta_corrected>0] = ik_eta_corrected[ik_eta_corrected>0]*eta[ik_eta_corrected>0] # Multiply by eta for cells where we are charging
-                z += (time_delta/(3600*q))*ik_eta_corrected # Update SOC
+                z += (time_delta/q)*ik_eta_corrected # Update SOC
             
             else:
                 
-                ik, vk, I, V = get_cell_currents_voltages(v_cells, b0, desired_power[k], cells_are_identical, self.charge_current_is_positive, self.Ns, self.Np)
                 ik_eta_corrected = ik.copy()
                 ik_eta_corrected[ik_eta_corrected<0] = ik_eta_corrected[ik_eta_corrected<0]*eta[ik_eta_corrected<0] # Multiply by eta for cells where we are charging
-                z -= (time_delta/(3600*q))*ik_eta_corrected # Update SOC
+                z -= (time_delta/q)*ik_eta_corrected # Update SOC
+            
             
             # Update history matrices
             
@@ -1329,46 +1447,46 @@ class Pack():
             T_hist[0,:,:] = T
             z_hist[0,:,:] = z_old
             
-            # Update ARX parameters
+            # Update LPV parameters
             if self.cell_model_is_dynamic:
                 
                 if self.cell_model_is_array:
 
                     for i in range(Ns):
                         for j in range(Np):
-                            b0[i,j] = self.cell_model[i,j]['b0'](z_old[i,j], T[i,j])
+                            b0[i,j] = self.cell_model[i,j]['b0'](z[i,j], T[i,j], ik[i,j])
                             
                             for l in range(model_order):
-                                a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
-                                b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j])
+                                a[l,i,j] = self.cell_model[i,j][f'a{l+1}'](z_hist[l,i,j], T_hist[l,i,j], i_hist[l,i,j])
+                                b[l,i,j] = self.cell_model[i,j][f'b{l+1}'](z_hist[l,i,j], T_hist[l,i,j], i_hist[l,i,j])
                 
                 else:
-                    b0 = self.cell_model['b0'](z, T)
+                    b0 = self.cell_model['b0'](z, T, ik)
                     for l in range(model_order):
-                        a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist, T_hist)
-                        b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist, T_hist)
+                        a[l,:,:] = self.cell_model[f'a{l+1}'](z_hist[l,:,:], T_hist[l,:,:], i_hist[l,:,:])
+                        b[l,:,:] = self.cell_model[f'b{l+1}'](z_hist[l,:,:], T_hist[l,:,:], i_hist[l,:,:])
                         
             # Store measurements
-            self.simulation_results['pack']['current'][k] = I
-            self.simulation_results['pack']['voltage'][k] = V
-            self.simulation_results['pack']['min_soc'][k] = np.min(z_old)
-            self.simulation_results['pack']['max_soc'][k] = np.max(z_old)
-            self.simulation_results['pack']['avg_soc'][k] = np.mean(z_old)
-            self.simulation_results['pack']['min_temp'][k] = np.min(T)
-            self.simulation_results['pack']['max_temp'][k] = np.max(T)
-            self.simulation_results['pack']['avg_temp'][k] = np.mean(T)
+            self.simulation_results['Pack']['Current [A]'][k] = I
+            self.simulation_results['Pack']['Voltage [V]'][k] = V
+            self.simulation_results['Pack']['Min SOC'][k] = np.min(z_old)
+            self.simulation_results['Pack']['Max SOC'][k] = np.max(z_old)
+            self.simulation_results['Pack']['Avg SOC'][k] = np.mean(z_old)
+            self.simulation_results['Pack']['Min temperature [C]'][k] = np.min(T)
+            self.simulation_results['Pack']['Max temperature [C]'][k] = np.max(T)
+            self.simulation_results['Pack']['Avg temperature [C]'][k] = np.mean(T)
             
             for i in range(Ns):
                 for j in range(Np):
-                    self.simulation_results[f'cell_{i}-{j}']['b0'][k] = b0[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['current'][k] = ik[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['voltage'][k] = vk[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['soc'][k] = z_old[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['ocv'][k] = ocv[i,j]
-                    self.simulation_results[f'cell_{i}-{j}']['temp'][k] = T[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['b0'][k] = b0[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Current [A]'][k] = ik[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Voltage [V]'][k] = vk[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['SOC'][k] = z_old[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['OCV [V]'][k] = ocv[i,j]
+                    self.simulation_results[f'Cell {i}-{j}']['Temperature [C]'][k] = T[i,j]
                     for l in range(model_order):
-                        self.simulation_results[f'cell_{i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
-                        self.simulation_results[f'cell_{i}-{j}'][f'b{l+1}'][k] = b[l,i,j]
+                        self.simulation_results[f'Cell {i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
+                        self.simulation_results[f'Cell {i}-{j}'][f'b{l+1}'][k] = b[l,i,j]
 
 class Vehicle():
     
@@ -1381,13 +1499,13 @@ class Vehicle():
         self.mass_curb = self.vehicle_model['Mass [kg]'] + self.pack.mass
         self.mass_max = self.mass_curb + self.vehicle_model['Payload [kg]']
         self.mass_rotating = (
-            (self.vehicle_model['Motor Inertia [kg/m2]'] + self.vehicle_model['Gear Inertia [kg/m2]']
-             ) * self.vehicle_model['Gear Ratio']**2 + self.vehicle_model['Wheel Inertia [kg/m2]']*self.vehicle_model['No. Wheels']
-            ) / self.vehicle_model['Wheel Radius [m]']**2
+            (self.vehicle_model['Motor inertia [kg/m2]'] + self.vehicle_model['Gear inertia [kg/m2]']
+             ) * self.vehicle_model['Gear ratio']**2 + self.vehicle_model['Wheel inertia [kg/m2]']*self.vehicle_model['Number of wheels']
+            ) / self.vehicle_model['Wheel radius [m]']**2
         self.mass_equivalent = self.vehicle_model['Mass [kg]'] + self.mass_rotating
-        self.max_speed = 2*np.pi*self.vehicle_model['Wheel Radius [m]']*self.vehicle_model['Max RPM [RPM]']/(60*self.vehicle_model['Gear Ratio']) # m/s
-        self.max_power = 2*np.pi* self.vehicle_model['Max Motor Torque [Nm]'] * self.vehicle_model['Rated RPM [RPM]'] / 60000 # kW
-        self.drivetrain_efficiency = self.pack.efficiency * self.vehicle_model['Inverter Efficiency'] * self.vehicle_model['Motor Efficiency'] * self.vehicle_model['Gear Efficiency']
+        self.max_speed = 2*np.pi*self.vehicle_model['Wheel radius [m]']*self.vehicle_model['Max RPM [RPM]']/(60*self.vehicle_model['Gear ratio']) # m/s
+        self.max_power = 2*np.pi* self.vehicle_model['Max motor torque [Nm]'] * self.vehicle_model['Rated RPM [RPM]'] / 60 # W
+        self.drivetrain_efficiency = self.pack.efficiency * self.vehicle_model['Inverter efficiency'] * self.vehicle_model['Motor efficiency'] * self.vehicle_model['Gear efficiency']
         
         self.initial_conditions = None
         self.simulation_results = None
@@ -1418,28 +1536,25 @@ class Vehicle():
         
         sim_len = len(time)
         
-        self.simulation_results['time'] = np.array(time) # s
-        self.simulation_results['time_delta'] = time_delta # s
-        self.simulation_results['speed_desired'] = np.clip(np.array(speed_desired), 0, self.max_speed) # m/s
-        self.simulation_results['acceleration_desired'] = np.zeros(sim_len) # m/s2
-        self.simulation_results['acceleration_force_desired'] = np.zeros(sim_len) # N
-        self.simulation_results['aero_force'] = np.zeros(sim_len) # N
-        self.simulation_results['rolling_grade_force'] = np.zeros(sim_len) # N
-        self.simulation_results['torque_demand'] = np.zeros(sim_len) # N-m
-        self.simulation_results['torque_max'] = np.zeros(sim_len) # N-m
-        self.simulation_results['regen_limit'] = np.zeros(sim_len) # N-m
-        self.simulation_results['torque_limit'] = np.zeros(sim_len) # N-m
-        self.simulation_results['torque_motor'] = np.zeros(sim_len) # N-m
-        # self.simulation_results['power_demand'] = np.zeros(sim_len) # kW
-        self.simulation_results['power_limit'] = np.zeros(sim_len) # kW
-        self.simulation_results['battery_demand'] = np.zeros(sim_len) # kW
-        # self.simulation_results['current'] = np.zeros(sim_len)
-        # self.simulation_results['battery_soc'] = np.zeros(sim_len)
-        self.simulation_results['acceleration_force_actual'] = np.zeros(sim_len) # N
-        self.simulation_results['acceleration_actual'] = np.zeros(sim_len) # m/s2
-        self.simulation_results['motor_speed'] = np.zeros(sim_len) # RPM
-        self.simulation_results['motor_power'] = np.zeros(sim_len) # kW
-        self.simulation_results['speed_actual'] = np.zeros(sim_len) # m/s
+        self.simulation_results['Time [s]'] = np.array(time) # s
+        self.simulation_results['Sample period [s]'] = time_delta # s
+        self.simulation_results['Desired speed [m/s]'] = np.clip(np.array(speed_desired), 0, self.max_speed) # m/s
+        self.simulation_results['Desired acceleration [m/s2]'] = np.zeros(sim_len) # m/s2
+        self.simulation_results['Desired acceleration force [N]'] = np.zeros(sim_len) # N
+        self.simulation_results['Aerodynamic force [N]'] = np.zeros(sim_len) # N
+        self.simulation_results['Rolling grade force [N]'] = np.zeros(sim_len) # N
+        self.simulation_results['Torque demand [Nm]'] = np.zeros(sim_len) # Nm
+        self.simulation_results['Max torque [Nm]'] = np.zeros(sim_len) # Nm
+        self.simulation_results['Limited regenerative torque [Nm]'] = np.zeros(sim_len) # Nm
+        self.simulation_results['Limited torque [Nm]'] = np.zeros(sim_len) # Nm
+        self.simulation_results['Motor torque [Nm]'] = np.zeros(sim_len) # Nm
+        self.simulation_results['Limited power [W]'] = np.zeros(sim_len) # W
+        self.simulation_results['Battery power demand [W]'] = np.zeros(sim_len) # W
+        self.simulation_results['Actual acceleration force [N]l'] = np.zeros(sim_len) # N
+        self.simulation_results['Actual acceleration [m/s2]'] = np.zeros(sim_len) # m/s2
+        self.simulation_results['Motor speed [RPM]'] = np.zeros(sim_len) # RPM
+        self.simulation_results['Motor power [W]'] = np.zeros(sim_len) # W
+        self.simulation_results['Actual speed [m/s]'] = np.zeros(sim_len) # m/s
 
     def set_initial_conditions(self, speed=0, motor_speed=0):
         """
@@ -1459,8 +1574,8 @@ class Vehicle():
         """
         self.initial_conditions = dict()
         
-        self.initial_conditions['speed'] = speed # m/s
-        self.initial_conditions['motor_speed'] = motor_speed # RPM
+        self.initial_conditions['Speed [m/s]'] = speed # m/s
+        self.initial_conditions['Motor speed [RPM]'] = motor_speed # RPM
     
     def simulate_vehicle(self, time, speed_desired, time_delta, off_times=None):
         """
@@ -1483,17 +1598,17 @@ class Vehicle():
         
         # Initialize temporary variables
         
-        drag_coef = self.vehicle_model['Drag Coefficient']
-        front_area = self.vehicle_model['Frontal Area [m2]']
-        roll_coef = self.vehicle_model['Rolling Coefficient']
-        road_force = self.vehicle_model['Brake Drag [N]']
-        wheel_radius = self.vehicle_model['Wheel Radius [m]']
-        gear_ratio = self.vehicle_model['Gear Ratio']
-        L_max = self.vehicle_model['Max Motor Torque [Nm]']
+        drag_coef = self.vehicle_model['Drag coefficient']
+        front_area = self.vehicle_model['Frontal area [m2]']
+        roll_coef = self.vehicle_model['Rolling coefficient']
+        road_force = self.vehicle_model['Brake drag [N]']
+        wheel_radius = self.vehicle_model['Wheel radius [m]']
+        gear_ratio = self.vehicle_model['Gear ratio']
+        L_max = self.vehicle_model['Max motor torque [Nm]']
         RPM_rated = self.vehicle_model['Rated RPM [RPM]']
         RPM_max = self.vehicle_model['Max RPM [RPM]']
-        regen_torque = self.vehicle_model['Fractional Regen Torque Limit']
-        overhead_power = self.vehicle_model['Overhead Power [W]']
+        regen_torque = self.vehicle_model['Fractional regen torque limit']
+        overhead_power = self.vehicle_model['Overhead power [W]']
         
         air_density = 1.225 # kg/m3
         G = 9.81 # m/s2
@@ -1504,76 +1619,74 @@ class Vehicle():
             # If initial conditions have not been set by the user
             self.set_initial_conditions(speed=speed_desired[0])
         
-        sim_len = len(self.simulation_results['time'])
+        sim_len = len(self.simulation_results['Time [s]'])
         
-        self.simulation_results['speed_actual'][-1] = self.initial_conditions['speed']
-        self.simulation_results['motor_speed'][-1] = self.initial_conditions['motor_speed']
+        self.simulation_results['Actual speed [m/s]'][-1] = self.initial_conditions['Speed [m/s]']
+        self.simulation_results['Motor speed [RPM]'][-1] = self.initial_conditions['Motor speed [RPM]']
         
         for i in range(sim_len):
             
-            
-            
-            self.simulation_results['acceleration_desired'][i] = (
-                self.simulation_results['speed_desired'][i] - self.simulation_results['speed_actual'][i-1]
+            self.simulation_results['Desired acceleration [m/s2]'][i] = (
+                self.simulation_results['Desired speed [m/s]'][i] - self.simulation_results['Actual speed [m/s]'][i-1]
                 )/time_delta
-            self.simulation_results['acceleration_force_desired'][i] = self.mass_equivalent * self.simulation_results['acceleration_desired'][i]
-            self.simulation_results['aero_force'][i] = 0.5*air_density*drag_coef*front_area*(self.simulation_results['speed_actual'][i-1])**2
+            self.simulation_results['Desired acceleration force [N]'][i] = self.mass_equivalent * self.simulation_results['Desired acceleration [m/s2]'][i]
+            self.simulation_results['Aerodynamic force [N]'][i] = 0.5*air_density*drag_coef*front_area*(self.simulation_results['Actual speed [m/s]'][i-1])**2
             
-            self.simulation_results['rolling_grade_force'][i] = 0
+            self.simulation_results['Rolling grade force [N]'][i] = 0
             
-            if self.simulation_results['speed_actual'][i-1] > 0:
-                self.simulation_results['rolling_grade_force'][i] += roll_coef*self.mass_max*G
+            if self.simulation_results['Actual speed [m/s]'][i-1] > 0:
+                self.simulation_results['Rolling grade force [N]'][i] += roll_coef*self.mass_max*G
             
-            self.simulation_results['torque_demand'][i] = (self.simulation_results['acceleration_force_desired'][i] + 
-                                                           self.simulation_results['aero_force'][i] + 
-                                                           self.simulation_results['rolling_grade_force'][i] +
+            self.simulation_results['Torque demand [Nm]'][i] = (self.simulation_results['Desired acceleration force [N]'][i] + 
+                                                           self.simulation_results['Aerodynamic force [N]'][i] + 
+                                                           self.simulation_results['Rolling grade force [N]'][i] +
                                                            road_force)*wheel_radius/gear_ratio
             
-            self.simulation_results['torque_max'][i] = L_max
-            if self.simulation_results['motor_speed'][i-1] >= RPM_rated:
-                self.simulation_results['torque_max'][i] = self.simulation_results['torque_max'][i]*RPM_rated/self.simulation_results['motor_speed'][i-1]
+            self.simulation_results['Max torque [Nm]'][i] = L_max
+            if self.simulation_results['Motor speed [RPM]'][i-1] >= RPM_rated:
+                self.simulation_results['Max torque [Nm]'][i] = self.simulation_results['Max torque [Nm]'][i]*RPM_rated/self.simulation_results['Motor speed [RPM]'][i-1]
             
-            self.simulation_results['regen_limit'][i] = min(self.simulation_results['torque_max'][i], regen_torque*L_max)
-            self.simulation_results['torque_limit'][i] = min(self.simulation_results['torque_demand'][i], self.simulation_results['torque_max'][i])
+            self.simulation_results['Limited regenerative torque [Nm]'][i] = min(self.simulation_results['Max torque [Nm]'][i], regen_torque*L_max)
+            self.simulation_results['Limited torque [Nm]'][i] = min(self.simulation_results['Torque demand [Nm]'][i], self.simulation_results['Max torque [Nm]'][i])
             
-            if self.simulation_results['torque_limit'][i] > 0:
-                self.simulation_results['torque_motor'][i] = self.simulation_results['torque_limit'][i]
+            if self.simulation_results['Limited torque [Nm]'][i] > 0:
+                self.simulation_results['Motor torque [Nm]'][i] = self.simulation_results['Limited torque [Nm]'][i]
             else:
-                self.simulation_results['torque_motor'][i] = max(-self.simulation_results['regen_limit'][i], self.simulation_results['torque_limit'][i])
+                self.simulation_results['Motor torque [Nm]'][i] = max(-self.simulation_results['Limited regenerative torque [Nm]'][i], self.simulation_results['Limited torque [Nm]'][i])
             
-            self.simulation_results['acceleration_force_actual'][i] = (
-                self.simulation_results['torque_limit'][i] * gear_ratio / 
-                wheel_radius - self.simulation_results['aero_force'][i] - 
-                self.simulation_results['rolling_grade_force'][i] - road_force)
+            self.simulation_results['Actual acceleration force [N]l'][i] = (
+                self.simulation_results['Limited torque [Nm]'][i] * gear_ratio / 
+                wheel_radius - self.simulation_results['Aerodynamic force [N]'][i] - 
+                self.simulation_results['Rolling grade force [N]'][i] - road_force)
             
-            self.simulation_results['acceleration_actual'][i] = self.simulation_results['acceleration_force_actual'][i]/self.mass_equivalent
-            self.simulation_results['motor_speed'][i] = min(RPM_max,
+            self.simulation_results['Actual acceleration [m/s2]'][i] = self.simulation_results['Actual acceleration force [N]l'][i]/self.mass_equivalent
+            self.simulation_results['Motor speed [RPM]'][i] = min(RPM_max,
                                                             gear_ratio*(
-                                                            self.simulation_results['speed_actual'][i-1] + 
-                                                            self.simulation_results['acceleration_actual'][i]*time_delta)*60/(
+                                                            self.simulation_results['Actual speed [m/s]'][i-1] + 
+                                                            self.simulation_results['Actual acceleration [m/s2]'][i]*time_delta)*60/(
                                                                 2*np.pi*wheel_radius))
                                                                        
-            self.simulation_results['speed_actual'][i] = self.simulation_results['motor_speed'][i]*2*np.pi*wheel_radius/(60*gear_ratio)
+            self.simulation_results['Actual speed [m/s]'][i] = self.simulation_results['Motor speed [RPM]'][i]*2*np.pi*wheel_radius/(60*gear_ratio)
             
-            if self.simulation_results['torque_limit'][i] > 0:
-                self.simulation_results['motor_power'][i] = self.simulation_results['torque_limit'][i]
+            if self.simulation_results['Limited torque [Nm]'][i] > 0:
+                self.simulation_results['Motor power [W]'][i] = self.simulation_results['Limited torque [Nm]'][i]
             else:
-                self.simulation_results['motor_power'][i] = max(self.simulation_results['torque_limit'][i],
-                                                             -self.simulation_results['regen_limit'][i])
+                self.simulation_results['Motor power [W]'][i] = max(self.simulation_results['Limited torque [Nm]'][i],
+                                                             -self.simulation_results['Limited regenerative torque [Nm]'][i])
             
-            self.simulation_results['motor_power'][i] = self.simulation_results['motor_power'][i]*2*np.pi/60000*(
-                self.simulation_results['motor_speed'][i-1] + self.simulation_results['motor_speed'][i])/2
+            self.simulation_results['Motor power [W]'][i] = self.simulation_results['Motor power [W]'][i]*2*np.pi/60*(
+                self.simulation_results['Motor speed [RPM]'][i-1] + self.simulation_results['Motor speed [RPM]'][i])/2
             
-            self.simulation_results['power_limit'][i] = max(-self.max_power, 
+            self.simulation_results['Limited power [W]'][i] = max(-self.max_power, 
                                                          min(self.max_power, 
-                                                             self.simulation_results['motor_power'][i]))
+                                                             self.simulation_results['Motor power [W]'][i]))
             
-            self.simulation_results['battery_demand'][i] = overhead_power/1000
+            self.simulation_results['Battery power demand [W]'][i] = overhead_power
             
-            if self.simulation_results['power_limit'][i] > 0:
-                self.simulation_results['battery_demand'][i] += self.simulation_results['power_limit'][i]/self.drivetrain_efficiency
+            if self.simulation_results['Limited power [W]'][i] > 0:
+                self.simulation_results['Battery power demand [W]'][i] += self.simulation_results['Limited power [W]'][i]/self.drivetrain_efficiency
             else:
-                self.simulation_results['battery_demand'][i] += self.simulation_results['power_limit'][i]*self.drivetrain_efficiency
+                self.simulation_results['Battery power demand [W]'][i] += self.simulation_results['Limited power [W]'][i]*self.drivetrain_efficiency
 
     def simulate_battery_pack(self):
         """
@@ -1586,7 +1699,7 @@ class Vehicle():
 
         """
         
-        self.pack.simulate_pack(self.simulation_results['battery_demand'], self.simulation_results['time_delta'])
+        self.pack.simulate_pack(self.simulation_results['Battery power demand [W]'], self.simulation_results['Sample period [s]'])
     
 if __name__ == '__main__':
     pass
