@@ -701,7 +701,7 @@ class Pack():
                 
                 cell_nominal_voltages = np.nan_to_num(cell_nominal_voltages, nan=3.6)
             
-            self.nominal_energy_capacity = np.sum(np.mean(cell_nominal_voltages, axis=1))*self.nominal_charge_capacity
+                self.nominal_energy_capacity = np.sum(np.mean(cell_nominal_voltages, axis=1))*self.nominal_charge_capacity
             
             else:
                 self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal voltage [V]']/3600 # Wh
