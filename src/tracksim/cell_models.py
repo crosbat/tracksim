@@ -72,10 +72,10 @@ def load_Zheng2024() -> dict:
     
     return Zheng2024Cell
 
-def load_ARX1() -> dict:
+def load_LPV1() -> dict:
 
-    Sheikh2025_OCV = np.load(f'{current_dir}/battery_data/Sheikh2025_OCV.npy') # SOC, OCV, dOCVdT, reference temp
-    ARX1 = {'Model name' : 'ARX1',
+    Sheikh2025_OCV = pd.read_csv(f'{current_dir}/battery_data/Sheikh2025_OCV.csv') # SOC, OCV, dOCVdT, reference temp
+    ARX1 = {'Model name' : 'LPV1',
             'Reference' : 'A. M. A. Sheikh, M. C. F. Donkers, and H. J. Bergveld, “Towards Temperature-Dependent Linear Parameter-Varying Models for Lithium-Ion Batteries Using Novel Experimental Design"',
             'Description' : '',
             'Cathode' : 'NMC',
@@ -86,17 +86,17 @@ def load_ARX1() -> dict:
             'Max voltage [V]' : 4.3,
             'Nominal capacity [As]' : 2.85*3600,
             'Mass [kg]' : 0.1,
-            'Model type' : 'ARX',
+            'Model type' : 'LPV',
             'Model order' : 1,
             'Model SOC range [%]' : '0 - 100',
             'Model temperature range [C]' : '0 - 40',
             'Positive charging current' : True,
             'Capacity [As]' : 2.85*3600,
             'Coulombic efficiency' : 0.99,
-            'OCV [V]': lambda SOC=DEFAULT_SOC,T=DEFAULT_T : np.interp(SOC, Sheikh2025_OCV[:,0], Sheikh2025_OCV[:,1]),
-            'a1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T : 0.9933440215515096 - 0.026935937927911158*SOC + 0.0015363842773228609*(1/SOC) + 0.008538228338747142*np.log(SOC) - 8.575836366354313e-05*T,
-            'b0' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T : 0.03537836953990937 + 0.0347816001624795*SOC + 0.0002619271937535544*(1/SOC) - 0.017933384633424906*np.log(SOC) - 0.0011966599355291887*T,
-            'b1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T : -0.032216431735397476 - 0.034904510512622604*SOC + 0.00021704828547704054*(1/SOC) + 0.01957181819840551*np.log(SOC) + 0.0011452590232353857*T} 
+            'OCV [V]': lambda SOC=DEFAULT_SOC,T=DEFAULT_T : np.interp(SOC, Sheikh2025_OCV['SOC'], Sheikh2025_OCV['OCV [V]']),
+            'a1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.9933440215515096 - 0.026935937927911158*SOC + 0.0015363842773228609*(1/SOC) + 0.008538228338747142*np.log(SOC) - 8.575836366354313e-05*T,
+            'b0' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.03537836953990937 + 0.0347816001624795*SOC + 0.0002619271937535544*(1/SOC) - 0.017933384633424906*np.log(SOC) - 0.0011966599355291887*T,
+            'b1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : -0.032216431735397476 - 0.034904510512622604*SOC + 0.00021704828547704054*(1/SOC) + 0.01957181819840551*np.log(SOC) + 0.0011452590232353857*T} 
 
     return ARX1
 
