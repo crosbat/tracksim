@@ -8,9 +8,12 @@ DEFAULT_SOC = 0.5    # 50%
 DEFAULT_T   = 25 # deg C
 DEFAULT_I = 0
 
+MODEL_LIST = ['GenericECM', 'Zheng2024']
+
 def load_GenericECM() -> dict:
 
     GenericECM = {'Model name' : None,
+                  'Description' : 'Generic structure for a 2RC Equivalent Circuit Model (EM). The model can easily be extended with extra RC pairs by adding "Ri [Ohm]" and "Ci [Ohm]" with i being the index of the RC pair.',
                   'Reference' : None,
                   'Cell model number' : None,
                   'Cathode' : None,
@@ -30,7 +33,9 @@ def load_GenericECM() -> dict:
                   'Coulombic efficiency' : None,
                   'R0 [Ohm]' : None,
                   'R1 [Ohm]' : None,
+                  'R2 [Ohm]' : None,
                   'C1 [F]' : None,
+                  'C2 [F]' : None,
                   'OCV [V]' : None,
                   'Tab resistance [Ohm]' : None}
     
@@ -39,8 +44,9 @@ def load_GenericECM() -> dict:
 def load_Zheng2024() -> dict:
     
     Zheng2024_OCV = pd.read_csv(f'{current_dir}/battery_data/Zheng2024_OCV.csv') # SOC, OCV
-    Zheng2024Cell = {'Model name' : 'Zheng2024Cell',
+    Zheng2024Cell = {'Model name' : 'Zheng2024',
                      'Reference' : 'Y. Zheng, Y. Che, X. Hu, X. Sui, and R. Teodorescu, “Online Sensorless Temperature Estimation of Lithium-Ion Batteries Through Electro-Thermal Coupling,” IEEE/ASME Transactions on Mechatronics, vol. 29, no. 6, pp. 4156–4167, Dec. 2024, doi: 10.1109/TMECH.2024.3367291.',
+                     'Description' : '1RC Equivalent Circuit Model (ECM) obtained from experimental data. The ECM is part of an electro-thermal model. The corresponding thermal model is accessed by temperature_models.Zheng2024Temp.',
                      'Cell model number' : 'CALB L148N50B',
                      'Cathode' : 'NMC',
                      'Anode' : 'Graphite',
@@ -71,6 +77,7 @@ def load_LPV1() -> dict:
     Sheikh2025_OCV = pd.read_csv(f'{current_dir}/battery_data/Sheikh2025_OCV.csv') # SOC, OCV, dOCVdT, reference temp
     ARX1 = {'Model name' : 'LPV1',
             'Reference' : 'A. M. A. Sheikh, M. C. F. Donkers, and H. J. Bergveld, “Towards Temperature-Dependent Linear Parameter-Varying Models for Lithium-Ion Batteries Using Novel Experimental Design"',
+            'Description' : '',
             'Cathode' : 'NMC',
             'Anode' : 'Graphite',
             'Form factor' : 'Cylindrical',

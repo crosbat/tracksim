@@ -741,26 +741,68 @@ class Pack():
         
         # Get pack mass, charge capacity, and energy capacity
         
+        # Calculate mass of the battery pack
+        
+        if self.cell_model['Mass [kg]'] is None:
+            warnings.warn('The given cell model contains no mass. In this case, a massless battery pack is assumed.')
+            self.mass = 0
+        
+        else:
+            if self.cell_model_is_array:
+                cell_masses = np.zeros(shape=(self.Ns,self.Np))
+                for i in range(self.Ns):
+                    for j in range(self.Np):
+                            cell_masses[i,j] = self.cell_model[i,j]['Mass [kg]']
+                
+                cell_masses_sum = np.sum(np.nan_to_num(cell_masses))
+                self.mass = cell_masses_sum*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
+            
+            else:
+                self.mass = self.n_cells*self.cell_model['Mass [kg]']*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
+        
+        # Calculate nominal charge capacity of the battery pack
+        
+        if self.cell_model['Nominal capacity [As]'] is None:
+            warnings.warn('the given cell model contains no nominal charge capacity. The true charge capacity of the cells will be used instead.')
+            capacity_string = 'Capacity [As]'
+        else:
+            capacity_string = 'Nominal capacity [As]'
+            
+            
         if self.cell_model_is_array:
             
-            cell_masses = np.zeros(shape=(self.Ns,self.Np))
             cell_nominal_charge_capacities = np.zeros(shape=(self.Ns,self.Np))
-            cell_nominal_voltages = np.zeros(shape=(self.Ns,self.Np))
             
             for i in range(self.Ns):
                 for j in range(self.Np):
-                    cell_masses[i,j] = self.cell_model[i,j]['Mass [kg]']
-                    cell_nominal_charge_capacities[i,j] = self.cell_model[i,j]['Nominal capacity [As]']
-                    cell_nominal_voltages[i,j] = self.cell_model[i,j]['Nominal voltage [V]']
+                    cell_nominal_charge_capacities[i,j] = self.cell_model[i,j][capacity_string]
             
-            self.mass = np.sum(cell_masses)*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
-            self.nominal_charge_capacity = np.min(np.sum(cell_nominal_charge_capacities, axis=1))
-            self.nominal_energy_capacity = np.sum(np.mean(cell_nominal_voltages, axis=1))*self.nominal_charge_capacity
+            self.nominal_charge_capacity = np.min(np.sum(np.nan_to_num(cell_nominal_charge_capacities), axis=1))
             
         else:
-            self.mass = self.n_cells*self.cell_model['Mass [kg]']*1/(1-self.pack_model['Battery module overhead'])*1/(1-self.pack_model['Battery pack overhead'])
-            self.nominal_charge_capacity = self.Np * self.cell_model['Nominal capacity [As]']
-            self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal voltage [V]']/3600 # Wh
+            self.nominal_charge_capacity = self.Np * self.cell_model[capacity_string]
+            
+        # Calculate nominal energy capacity of the battery pack
+        
+        if self.cell_model['Nominal voltage [V]'] is None:
+            warnings.warn('The given cell model contains no nominal voltage. A nominal voltage of 3.6V for each cell is assumed')
+            self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*3.6/3600 # Wh
+        
+        else:
+            if self.cell_model_is_array:
+                
+                cell_nominal_voltages = np.ones(shape=(self.Ns,self.Np))
+                
+                for i in range(self.Ns):
+                    for j in range(self.Np):
+                            cell_nominal_voltages[i,j] = self.cell_model[i,j]['Nominal voltage [V]']
+                
+                cell_nominal_voltages = np.nan_to_num(cell_nominal_voltages, nan=3.6)
+            
+                self.nominal_energy_capacity = np.sum(np.mean(cell_nominal_voltages, axis=1))*self.nominal_charge_capacity
+            
+            else:
+                self.nominal_energy_capacity = self.nominal_charge_capacity*self.Ns*self.cell_model['Nominal voltage [V]']/3600 # Wh
         
         if self.nominal_energy_capacity < 20000:
             warnings.warn(f"The nominal energy capacity for this pack is {self.nominal_energy_capacity/1000:.2f} kWh, which is considered low for typical EVs. This may have adverse effects in the simulation if the voltage of the cells goes outside the normal bounds. To increase the nominal capacity, please consider increasing the number of cells by changing the 'Number of cells in series' or 'Number of cells in parallel' values in the pack model.")
