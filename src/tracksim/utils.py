@@ -54,7 +54,8 @@ def convert_pybatteryid_model_to_tracksim(pybid_model_path : str) -> dict:
     basis_function_dict = {'s' : 'SOC',
                            '1/s' : '(1/SOC)',
                            'log[s]' : 'np.log(SOC)',
-                           'd[0,1]' : 'np.sign(I)'}
+                           'd[0,1]' : 'np.sign(I)',
+                           'd[0,0]' : 'np.sign(I)'}
     
     supported_basis_functions = list(basis_function_dict.keys())
     supported_basis_functions.append('exp[lambda*sqrt[|i|]]')
@@ -120,7 +121,7 @@ def convert_pybatteryid_model_to_tracksim(pybid_model_path : str) -> dict:
     # Translate the model estimates and terms into lambda expression for TRACKSIM
     for arx_coeff, terms, coeffs in zip(arx_coeffs, arx_terms, term_coeffs):
         
-        lambda_string = 'lambda SOC=0.5,T=25, I=0 : '
+        lambda_string = 'lambda SOC=0.5, T=25, I=0 : '
     
         for term, coeff in zip(terms, coeffs):
             

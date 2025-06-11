@@ -1393,6 +1393,8 @@ class Pack():
         T_hist = np.ones(shape=(model_order, Ns, Np))*T
         z_hist = np.ones(shape=(model_order, Ns, Np))*z
         
+        #TODO: add history matrix for current direction values
+        
         if self.cell_model_is_array:
             for i in range(Ns):
                 for j in range(Np):
@@ -1462,9 +1464,9 @@ class Pack():
                 # Calculate cell currents and voltages using optimization
                 
                 if not self.cells_are_identical:
-                    raise ValueError('Current-dependent b0 is currently not supported in packs with non-identical cells and initial conditions.')
+                    raise ValueError('Current-dependent b0 is currently not supported in packs with non-identical cells and different initial conditions.')
                 
-                v_inst = lambda x : self.cell_model['b0'](SOC=z, T=T, I=x)*x
+                v_inst = lambda x : self.cell_model['b0'](SOC=z, T=T, I=x)*x # TODO: include d term (previous d)
                 
                 ik, vk, I, V = get_cell_currents_voltages_optimization(v_cells, 
                                                                        v_inst,
@@ -1484,6 +1486,8 @@ class Pack():
                 ik_eta_corrected = ik.copy()
                 ik_eta_corrected[ik_eta_corrected<0] = ik_eta_corrected[ik_eta_corrected<0]*eta[ik_eta_corrected<0] # Multiply by eta for cells where we are charging
                 z -= (sample_period/q)*ik_eta_corrected # Update SOC
+            
+            #TODO: update current direction variable
             
             # Update history matrices
             

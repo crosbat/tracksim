@@ -100,5 +100,7 @@ def load_LPV1() -> dict:
 
     return ARX1
 
+# TODO: add LPV model with d[0.01, 0.99] term
+
 if __name__ == '__main__':
     pass
