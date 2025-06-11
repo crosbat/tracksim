@@ -69,10 +69,10 @@ def get_cell_currents_voltages(vf: np.ndarray,
         Series resistance of each cell.
     desired_power : float
         Desired power for the current step.
-    cells_are_identical : float
-        If true, then the thevenin equivalent voltage source and resistance are
+    cells_are_identical : bool
+        If True, then the thevenin equivalent voltage source and resistance are
         assumed to be the same for all cells. This simplifies the calculation
-        of vT and rT using the number of cells in series and parallel. If False
+        of vT and rT using the number of cells in series and parallel. If False,
         then the cells are treated as not being equal which can slow down
         computations.
     charge_current_is_positive : bool
@@ -160,7 +160,33 @@ def obj_func_positive_charge_current(ik : float,
                                      desired_power : float,
                                      Ns : int,
                                      Np : int) -> float:
-    
+    """
+    Computes the squared difference between the desired power from the battery
+    cell and the one produced from the optimization algorithm. The function 
+    assumes that charging current is positive.
+
+    Parameters
+    ----------
+    ik : float
+        Current of the cell.
+    v_inst : callable
+        Instantaneous part of the cell voltage as a function of instantaneous 
+        current.
+    vf : float
+        Fixed part of the cell voltage.
+    desired_power : float
+        Desired power of the battery pack.
+    Ns : int
+        Number of cells in series.
+    Np : int
+        Number of cells in parallel.
+
+    Returns
+    -------
+    float
+        Squared difference.
+
+    """
     return ((vf + v_inst(ik))*ik - desired_power/(Ns*Np))**2
 
 def obj_func_negative_charge_current(ik : float, 
@@ -168,6 +194,33 @@ def obj_func_negative_charge_current(ik : float,
                                      vf : float,
                                      desired_power : float,
                                      Ns : int) -> float:
+    """
+    Computes the squared difference between the desired power from the battery
+    cell and the one produced from the optimization algorithm. The function 
+    assumes that charging current is negative.
+
+    Parameters
+    ----------
+    ik : float
+        Current of the cell.
+    v_inst : callable
+        Instantaneous part of the cell voltage as a function of instantaneous 
+        current.
+    vf : float
+        Fixed part of the cell voltage.
+    desired_power : float
+        Desired power of the battery pack.
+    Ns : int
+        Number of cells in series.
+    Np : int
+        Number of cells in parallel.
+
+    Returns
+    -------
+    float
+        Squared difference.
+
+    """
     
     return ((vf - v_inst(ik))*ik - desired_power/Ns)**2
 
@@ -178,7 +231,40 @@ def get_cell_currents_voltages_optimization(vf: np.ndarray,
                                             charge_current_is_positive: bool, 
                                             Ns: int, 
                                             Np: int) -> tuple:
-        
+    """
+    Calculates the required cell currents and voltages to meet the desired
+    power of the battery pack using non-linear optimization.
+
+    Parameters
+    ----------
+    vf : numpy.ndarray
+        Non-instantaneous voltage of the battery cell.
+    v_inst : callable
+        Instantaneous part of the cell voltage as a function of instantaneous 
+        current.
+    ik_init : float,
+        Inital estimate of the input current.
+    desired_power : float
+        Desired power for the current step.
+    charge_current_is_positive : bool
+        Indicates the direction of the current.
+    Ns : int
+        Number of cells in series.
+    Np : int
+        Number of cells in parallel.
+
+    Returns
+    -------
+    ik : numpy.ndarray
+        Individual cell currents for the current step.
+    vk : numpy.ndarray
+        Individual cell voltages for the current step.
+    I : float
+        Battery pack current for the current step.
+    V : float
+        Battery pack voltage for the current step.
+
+    """
     if charge_current_is_positive:
         
         partial_func = partial(obj_func_positive_charge_current, 
@@ -213,7 +299,40 @@ def check_if_cells_are_identical(cell_model : np.ndarray | dict,
                                  initial_temp : np.ndarray | float | int,
                                  initial_rc_current : np.ndarray | float | int,
                                  coolant_temp : np.ndarray | float | int) -> bool:
-    
+    """
+    Checks if the cells in the battery pack are identical in terms of the
+    cell models and their initial conditions.
+
+    Parameters
+    ----------
+    cell_model : np.ndarray | dict
+        Dict or array of dicts containing the cell model.
+    initial_soc : np.ndarray | int | float, optional
+        Initial SOC of the cells in the pack, either as a Ns x Np numpy 
+        array or as a single number (same across all cells). The default 
+        is 0.8.
+    inital_temp : np.ndarray | int | float, optional
+        Initial temperature of the cells in the pack in Celsius, either as 
+        a Ns x Np numpy array or as a single number (same across all cells). 
+        The default is 25 C.
+    initial_rc_current : np.ndarray | int | float, optional
+        Initial diffusion current of the cells in the pack in Ampere, either 
+        as a Ns x Np numpy array or as a single number (same across all 
+        cells). Only used if the cell model is an Equivalent Circuit Model.
+        The default is 0 A (cells are at rest).
+    coolant_temp : np.ndarray | int |float | None, optional
+        Temperature of the coolant in Celsius, either as a Ns x Np numpy 
+        array or as a single number (same across all cells). If None, then
+        no cooling is provided. Only used if the cell model is an 
+        Equivalent Circuit Model. The default is None.
+
+    Returns
+    -------
+    bool
+        True if all cells and theri initial conditions are the same, otherwise 
+        False.
+
+    """
     initial_socs_are_identical = False
     initial_temps_are_identical = False
     initial_ircs_are_identical = False
@@ -400,8 +519,22 @@ def convert_pybatteryid_model_to_tracksim(pybid_model_path : str) -> dict:
     
     return tracksim_model
 
-def plot_vehicle_and_battery_data(vehicle) -> None:
-    
+def plot_vehicle_and_battery_data(vehicle) -> tuple:
+    """
+    Plots useful data from a given simulated vehicle.
+
+    Parameters
+    ----------
+    vehicle : tracksim.Vehicle
+        Simulated instance of the Vehicle class. Both the vehicle and the
+        battery pack need to be simulated.
+
+    Returns
+    -------
+    tuple
+        Tuple with the generated figure and axes.
+
+    """
     time = vehicle.simulation_results['Time [s]']
     
     sim_len = len(time)
@@ -522,7 +655,7 @@ def plot_vehicle_and_battery_data(vehicle) -> None:
             ax[3,2].set_xlabel('Time [s]')
             ax[3,1].legend(bbox_to_anchor=(0.5,-0.4), loc='center', ncol=8)
             
-    return None
+    return fig, ax
   
 if __name__ == '__main__':
     
