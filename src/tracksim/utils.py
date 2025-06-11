@@ -3,8 +3,256 @@ Contains utility function used in the main tracksim module as well as other
 useful functions.
 """
 
+import os
+import shutil
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
+
+from functools import partial
+from scipy.optimize import minimize
+
+# =============================================================================
+# Utility functions for tracksim module
+# =============================================================================
+
+def make_clean_dir(path: str) -> None:
+    """
+    Cleans a giving directory. If the directory does not exist, then it will
+    be created.
+
+    Parameters
+    ----------
+    path : str
+        Path to the directory.
+
+    Returns
+    -------
+    None.
+
+    """
+    if path not in os.listdir():
+        print(f"\nMaking '{path}'")
+        os.mkdir(path)
+
+    else:
+        print(f"\nPurging '{path}'")
+        shutil.rmtree(path)
+        os.mkdir(path)
+    
+    return None
+
+def get_cell_currents_voltages(vf: np.ndarray, 
+                               r0: np.ndarray, 
+                               desired_power: float,  
+                               charge_current_is_positive: bool, 
+                               Ns: int, 
+                               Np: int,
+                               cells_are_identical: bool) -> tuple:
+    """
+    Calculates the required cell currents and voltages to meet the desired
+    power of the battery pack. The battery pack is modeled as an equivalent
+    Thevenin circuit i.e.
+    
+    vT = vf - rT*I
+    
+    where vf is the voltage of the voltage source, rT is the Thevenin
+    equivalent resistance, and I is the battery pack current (negative 
+    charge current). The Thevenin equivalent resistance is calcuated based on
+    the individual series resistance of each cell. 
+
+    Parameters
+    ----------
+    vf : numpy.ndarray
+        Non-instantaneous voltage of each battery cell.
+    r0 : numpy.ndarray
+        Series resistance of each cell.
+    desired_power : float
+        Desired power for the current step.
+    cells_are_identical : float
+        If true, then the thevenin equivalent voltage source and resistance are
+        assumed to be the same for all cells. This simplifies the calculation
+        of vT and rT using the number of cells in series and parallel. If False
+        then the cells are treated as not being equal which can slow down
+        computations.
+    charge_current_is_positive : bool
+        Indicates the direction of the current.
+    Ns : int
+        Number of cells in series.
+    Np : int
+        Number of cells in parallel.
+
+    Returns
+    -------
+    ik : numpy.ndarray
+        Individual cell currents for the current step.
+    vk : numpy.ndarray
+        Individual cell voltages for the current step.
+    I : float
+        Battery pack current for the current step.
+    V : float
+        Battery pack voltage for the current step.
+
+    """
+    if cells_are_identical:
+        
+        rT = r0/Np # Thevenin eq. resistance per module
+        vT = vf # Thevenin eq. voltage per module
+        rT_pack = Ns*rT # Thevenin eq. resistance for whole pack
+        vT_pack = Ns*vT # Thevenin eq. voltage for whole pack
+        
+        if charge_current_is_positive:
+            
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
+                 )/(-2*rT_pack) # Find necessary current for the desired power
+            
+            V = vT_pack + rT_pack*I # Get pack voltage
+            
+            vk = V/Ns # PCM terminal voltages
+            ik = (vk-vf)/r0 # Individual cell currents
+            
+            vk = vf + r0*ik # Get individual cell voltages
+        
+        else:
+            
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
+                 )/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I # Get pack voltage
+            
+            vk = V/Ns # PCM terminal voltages
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf - r0*ik # Get individual cell voltages
+    
+    else:
+        rT = 1/np.sum(1/r0,axis=1) # Thevenin eq. resistance per module
+        vT = np.sum(vf/r0,axis=1)*rT # Thevenin eq. voltage per module
+        rT_pack = np.sum(rT) # Thevenin eq. resistance for whole pack
+        vT_pack = np.sum(vT) # Thevenin eq. voltage for whole pack
+        
+        if charge_current_is_positive:
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
+                 )/(-2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack + rT_pack*I
+            
+            vk = (np.sum(vf/r0,axis=1)+I)/np.sum(1/r0,axis=1) # PCM terminal voltages
+            vk = np.tile(vk, (Np,1)).T
+            ik = (vk-vf)/r0 # Individual cell currents
+            
+            vk = vf + r0*ik # Get individual cell voltages
+        
+        else:
+            I = (vT_pack-np.sqrt(vT_pack**2-4*rT_pack*desired_power)
+                 )/(2*rT_pack) # Find necessary current for the desired power
+            V = vT_pack - rT_pack*I # Get pack voltage
+            
+            vk = (np.sum(vf/r0,axis=1)-I)/np.sum(1/r0,axis=1) # PCM terminal voltages
+            vk = np.tile(vk, (Np,1)).T
+            ik = (vf-vk)/r0 # Individual cell currents
+            
+            vk = vf - r0*ik # Get individual cell voltages
+
+    return ik, vk, I, V
+
+def obj_func_positive_charge_current(ik : float, 
+                                     v_inst : callable,
+                                     vf : float,
+                                     desired_power : float,
+                                     Ns : int,
+                                     Np : int) -> float:
+    
+    return ((vf + v_inst(ik))*ik - desired_power/(Ns*Np))**2
+
+def obj_func_negative_charge_current(ik : float, 
+                                     v_inst : callable,
+                                     vf : float,
+                                     desired_power : float,
+                                     Ns : int) -> float:
+    
+    return ((vf - v_inst(ik))*ik - desired_power/Ns)**2
+
+def get_cell_currents_voltages_optimization(vf: np.ndarray,
+                                            v_inst : callable,
+                                            ik_init : float,
+                                            desired_power : float,
+                                            charge_current_is_positive: bool, 
+                                            Ns: int, 
+                                            Np: int) -> tuple:
+        
+    if charge_current_is_positive:
+        
+        partial_func = partial(obj_func_positive_charge_current, 
+                               v_inst = v_inst,
+                               vf = vf,
+                               desired_power = -desired_power,
+                               Ns = Ns, Np = Np)
+        
+        ik = minimize(partial_func, ik_init).x.reshape(1,1)
+        
+        vk = vf + v_inst(ik)
+    
+    else:
+        
+        partial_func = partial(obj_func_negative_charge_current, 
+                               v_inst = v_inst,
+                               vf = vf,
+                               desired_power = desired_power,
+                               Ns = Ns)
+        
+        ik = minimize(partial_func, ik_init).x.reshape(1,1)
+        
+        vk = vf - v_inst(ik)
+    
+    I = ik*Np
+    V = vk*Ns
+    
+    return ik, vk, I, V
+
+def check_if_cells_are_identical(cell_model : np.ndarray | dict,
+                                 initial_soc : np.ndarray | float | int,
+                                 initial_temp : np.ndarray | float | int,
+                                 initial_rc_current : np.ndarray | float | int,
+                                 coolant_temp : np.ndarray | float | int) -> bool:
+    
+    initial_socs_are_identical = False
+    initial_temps_are_identical = False
+    initial_ircs_are_identical = False
+    coolant_temps_are_identical = False
+    
+    cell_model_is_array = isinstance(cell_model, np.ndarray)
+    soc_is_array = isinstance(initial_soc, np.ndarray)
+    temp_is_array = isinstance(initial_temp, np.ndarray)
+    irc_is_array = isinstance(initial_rc_current, np.ndarray)
+    coolant_temp_is_array = isinstance(coolant_temp, np.ndarray)
+    
+    if not soc_is_array:
+        initial_socs_are_identical = True
+    else:
+        initial_socs_are_identical = np.allclose(initial_soc, initial_soc[0,0])
+    
+    if not temp_is_array:
+        initial_temps_are_identical = True
+    else:
+        initial_temps_are_identical = np.allclose(initial_temp, initial_temp[0,0])
+    
+    if not irc_is_array:
+        initial_ircs_are_identical = True
+    else:
+        initial_ircs_are_identical = np.allclose(initial_rc_current, initial_rc_current[0,0])
+    
+    if not coolant_temp_is_array:
+        coolant_temps_are_identical = True
+    else:
+        coolant_temps_are_identical = np.allclose(coolant_temp, coolant_temp[0,0])
+    
+    if cell_model_is_array:
+        warnings.warn('When passing an array of cell models, it is assumed they will be treated as not identical during simulation. This will increase time and storage complexity in the simulation. If the cell models are meant to be identical, then please pass the cell model as a single dictionary.')
+    
+    return (not cell_model_is_array) & initial_socs_are_identical & initial_temps_are_identical & initial_ircs_are_identical & coolant_temps_are_identical
+
+# =============================================================================
+# Other useful functions
+# =============================================================================
 
 def moving_average(a : iter, n : int) -> np.array:
     ma = np.cumsum(a, dtype=float)
@@ -20,7 +268,7 @@ def exp_average(a : iter, alpha : float) -> np.array:
         ma[i] = alpha*a[i]+ (1-alpha)*ma[i-1]
     
     return ma
- 
+
 def translate_exp_term(term):
     lambda_coeff = float(term.split('*')[0].split('[')[1])
     return f'np.exp({lambda_coeff}*np.sqrt(np.abs(I)))'
