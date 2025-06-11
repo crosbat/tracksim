@@ -739,8 +739,6 @@ class Pack():
             if not self.temperature_model.shape == (self.Ns, self.Np):
                 raise ValueError(f"The shape of the temperature model array is inconsistent with the shape of the battery pack. The shape of the temperature model array is {self.cell_model.shape} while the shape of the battery pack is {(self.Ns, self.Np)}")
         
-        # Get pack mass, charge capacity, and energy capacity
-        
         # Calculate mass of the battery pack
         
         if self.cell_model['Mass [kg]'] is None:

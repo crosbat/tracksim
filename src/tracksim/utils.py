@@ -307,3 +307,5 @@ if __name__ == '__main__':
     
     vehicle.simulate_vehicle(udds['Time [s]'], udds['Speed [m/s]'], 1)
     vehicle.simulate_battery_pack()
+    
+    plot_vehicle_and_battery_data(vehicle)
