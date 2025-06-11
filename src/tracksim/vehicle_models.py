@@ -1,5 +1,7 @@
 
 GenericVehicle = {'Model name' : 'GenericVehicle',
+                  'Reference' : None,
+                  'Description' : 'Generic structure of a vehicle model.',
                   'Number of wheels' : None,
                   'Brake drag [N]' : None,
                   'Drag coefficient' : None,
@@ -23,6 +25,7 @@ GenericVehicle = {'Model name' : 'GenericVehicle',
 
 ChevyVolt = {'Model name' : 'Chevy Volt',
              'Reference' : 'G. L. Plett, Battery Management Systems, Volume 2: Equivalent Circuit Methods. in Artech House Power engineering series. Boston: Artech house, 2016.',
+             'Description' : 'Model of a Chevy Volt with parameters as described in Plett, 2016.',
              'Number of wheels' : 4,
              'Brake drag [N]' : 0,
              'Drag coefficient' : 0.22,
@@ -46,6 +49,7 @@ ChevyVolt = {'Model name' : 'Chevy Volt',
 
 ChevyVoltTuned = {'Model name' : 'Chevy Volt',
                   'Reference' : 'G. L. Plett, Battery Management Systems, Volume 2: Equivalent Circuit Methods. in Artech House Power engineering series. Boston: Artech house, 2016.',
+                  'Description' : 'A modified version of ChevyVolt with higher maximum motor torque and RPM.',
                   'Number of wheels' : 4,
                   'Brake drag [N]' : 0,
                   'Drag coefficient' : 0.22,

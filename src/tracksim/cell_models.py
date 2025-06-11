@@ -13,8 +13,8 @@ MODEL_LIST = ['GenericECM', 'Zheng2024']
 def load_GenericECM() -> dict:
 
     GenericECM = {'Model name' : None,
-                  'Description' : 'Generic structure for a 2RC Equivalent Circuit Model (EM). The model can easily be extended with extra RC pairs by adding "Ri [Ohm]" and "Ci [Ohm]" with i being the index of the RC pair.',
                   'Reference' : None,
+                  'Description' : 'Generic structure for a 2RC Equivalent Circuit Model (EM). The model can easily be extended with extra RC pairs by adding "Ri [Ohm]" and "Ci [Ohm]" with i being the index of the RC pair.',
                   'Cell model number' : None,
                   'Cathode' : None,
                   'Anode' : None,
