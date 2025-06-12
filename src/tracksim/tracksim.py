@@ -1576,7 +1576,7 @@ class Vehicle():
 
     def simulate_battery_pack(self,
                               initial_soc : np.ndarray | float | int = 0.8,
-                              inital_temp : np.ndarray | float | int = 25,
+                              initial_temp : np.ndarray | float | int = 25,
                               initial_rc_current : np.ndarray | float | int = 0) -> None:
         """
         Simulates the battery pack using the generated power demand from the 
@@ -1588,7 +1588,7 @@ class Vehicle():
             Initial SOC of the cells in the pack, either as a Ns x Np numpy 
             array or as a single number (same across all cells). The default 
             is 0.8.
-        inital_temp : np.array | float | int, optional
+        initial_temp : np.array | float | int, optional
             Initial temperature of the cells in the pack in Celsius, either as 
             a Ns x Np numpy array or as a single number (same across all cells). 
             The default is 25 C.
@@ -1610,7 +1610,7 @@ class Vehicle():
         self.pack.simulate_pack(self.simulation_results['Battery power demand [W]'], 
                                 self.simulation_results['Sample period [s]'],
                                 initial_soc,
-                                inital_temp,
+                                initial_temp,
                                 initial_rc_current)
         
         return None

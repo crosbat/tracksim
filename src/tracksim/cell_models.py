@@ -75,7 +75,7 @@ def load_Zheng2024() -> dict:
 def load_LPV1() -> dict:
 
     Sheikh2025_OCV = pd.read_csv(f'{current_dir}/battery_data/Sheikh2025_OCV.csv') # SOC, OCV, dOCVdT, reference temp
-    ARX1 = {'Model name' : 'LPV1',
+    LPV1 = {'Model name' : 'LPV1',
             'Reference' : 'A. M. A. Sheikh, M. C. F. Donkers, and H. J. Bergveld, “Towards Temperature-Dependent Linear Parameter-Varying Models for Lithium-Ion Batteries Using Novel Experimental Design"',
             'Description' : '',
             'Cathode' : 'NMC',
@@ -98,7 +98,7 @@ def load_LPV1() -> dict:
             'b0' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.03537836953990937 + 0.0347816001624795*SOC + 0.0002619271937535544*(1/SOC) - 0.017933384633424906*np.log(SOC) - 0.0011966599355291887*T,
             'b1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : -0.032216431735397476 - 0.034904510512622604*SOC + 0.00021704828547704054*(1/SOC) + 0.01957181819840551*np.log(SOC) + 0.0011452590232353857*T} 
 
-    return ARX1
+    return LPV1
 
 # TODO: add LPV model with d[0.01, 0.99] term
 
