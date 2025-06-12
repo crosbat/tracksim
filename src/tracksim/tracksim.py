@@ -10,7 +10,7 @@ import libsumo as ls
 from tqdm import tqdm
 from multiprocessing import Pool
 
-from utils import make_clean_dir, check_if_cells_are_identical, get_cell_currents_voltages, get_cell_currents_voltages_optimization
+from tracksim.utils import make_clean_dir, check_if_cells_are_identical, get_cell_currents_voltages, get_cell_currents_voltages_optimization
 
 # =============================================================================
 # Traffic simulation functions
