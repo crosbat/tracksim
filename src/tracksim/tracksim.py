@@ -158,7 +158,7 @@ class Traffic():
                 data[veh_id]['Longitude'] = [] # Longitude
                 data[veh_id]['Latitude'] = [] # Latitude
             
-            if self.record_lane:
+            if self.record_edge:
                 data[veh_id]['Edge ID'] = [] # Network edge id
         
         data[veh_id]['Time [s]'].append(step*self.time_step)
