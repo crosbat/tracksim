@@ -28,7 +28,7 @@ class Traffic():
                  time_step: int | float = 1,
                  record_position: bool = False,
                  to_geo: bool = True,
-                 record_lane: bool = False, 
+                 record_edge: bool = False, 
                  pbar: bool = True,
                  checkpoint_dir: str = 'trip_checkpoints',
                  lite_mode_ratio: int | float | None = None,
@@ -59,8 +59,8 @@ class Traffic():
             Converts the position of the vehicle into geograpic coordinates 
             (longitude, latitude) if True. Only used if record_position is True.
             The default is True.
-        record_lane : bool, optional
-            Records the ID of the current lane in the network of each vehicle 
+        record_edge : bool, optional
+            Records the ID of the current edge in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
             The default is False.
         pbar : bool, optional
@@ -103,7 +103,7 @@ class Traffic():
         self.time_step = time_step
         self.record_position = record_position
         self.to_geo = to_geo
-        self.record_lane = record_lane
+        self.record_edge = record_edge
         self.pbar = pbar
         self.lite_mode_ratio = lite_mode_ratio
         
