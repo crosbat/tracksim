@@ -23,7 +23,7 @@ GenericVehicle = {'Model name' : 'GenericVehicle',
                   'Motor efficiency' : None,
                   'Motor inertia [kg/m2]' : None}
 
-ChevyVolt = {'Model name' : 'Chevy Volt',
+ChevyVolt = {'Model name' : 'ChevyVolt',
              'Reference' : 'G. L. Plett, Battery Management Systems, Volume 2: Equivalent Circuit Methods. in Artech House Power engineering series. Boston: Artech house, 2016.',
              'Description' : 'Model of a Chevy Volt with parameters as described in Plett, 2016.',
              'Number of wheels' : 4,
@@ -47,7 +47,7 @@ ChevyVolt = {'Model name' : 'Chevy Volt',
              'Motor efficiency' : 0.95,
              'Motor inertia [kg/m2]' : 0.2}
 
-ChevyVoltTuned = {'Model name' : 'Chevy Volt',
+ChevyVoltTuned = {'Model name' : 'ChevyVoltTuned',
                   'Reference' : 'G. L. Plett, Battery Management Systems, Volume 2: Equivalent Circuit Methods. in Artech House Power engineering series. Boston: Artech house, 2016.',
                   'Description' : 'A modified version of ChevyVolt with higher maximum motor torque and RPM.',
                   'Number of wheels' : 4,

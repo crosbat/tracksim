@@ -1076,7 +1076,7 @@ class Pack():
         self.simulation_results = dict()
         
         # Set up storage
-        self.simulation_results['time'] = np.arange(sim_len)*sample_period # s
+        self.simulation_results['Time [s]'] = np.arange(sim_len)*sample_period # s
         self.simulation_results['Pack'] = dict()
         self.simulation_results['Pack']['Current [A]'] = np.zeros(sim_len) # A
         self.simulation_results['Pack']['Voltage [V]'] = np.zeros(sim_len) # V
@@ -1280,8 +1280,6 @@ class Pack():
                 ik_eta_corrected = ik.copy()
                 ik_eta_corrected[ik_eta_corrected<0] = ik_eta_corrected[ik_eta_corrected<0]*eta[ik_eta_corrected<0] # Multiply by eta for cells where we are charging
                 z -= (sample_period/q)*ik_eta_corrected # Update SOC
-            
-            #TODO: update current direction variable
             
             # Update history matrices
             
