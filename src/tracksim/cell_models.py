@@ -72,6 +72,37 @@ def load_Zheng2024() -> dict:
     
     return Zheng2024Cell
 
+def load_LPV_2_1():
+    Sheikh2025_OCV = pd.read_csv(f'{current_dir}/battery_data/Sheikh2025_OCV.csv') # SOC, OCV, dOCVdT, reference temp
+    model = {'Model name' : 'LPV_2_1',
+            'Reference' : 'A. M. A. Sheikh, M. C. F. Donkers, and H. J. Bergveld, “A comprehensive approach to sparse identification of linear parameter-varying models for lithium-ion batteries using improved experimental design,” Journal of Energy Storage, vol. 95, p. 112581, Aug. 2024, doi: 10.1016/j.est.2024.112581.',
+            'Description' : 'Linear Parameter-Varying (LPV) model with model order 2 and nonlinearity order 1.',
+            'Cathode' : 'NMC',
+            'Anode' : 'Graphite',
+            'Form factor' : 'Cylindrical',
+            'Nominal voltage [V]' : 3.66,
+            'Min voltage [V]' : 2.75,
+            'Max voltage [V]' : 4.3,
+            'Nominal capacity [As]' : 3600,
+            'Mass [kg]' : 0.1,
+            'Model type' : 'LPV',
+            'Model order' : 2,
+            'Nonlinearity order' : 1,
+            'Model SOC range [%]' : '0 - 100',
+            'Model temperature range [C]' : '0 - 40',
+            'Positive charging current' : True,
+            'Capacity [As]' : 3440.05372,
+            'Coulombic efficiency' : 0.99,
+            'OCV [V]': lambda SOC=DEFAULT_SOC,T=DEFAULT_T : np.interp(SOC, Sheikh2025_OCV['SOC'], Sheikh2025_OCV['OCV [V]']),
+            'a1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.9829323374906082 + 0.0029357490083367637*np.sign(I),
+            'a2' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.0001675509416212704*np.sign(I) + 0.0007150281819278089*(1/SOC),
+            'b0' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.06533459793664415 + 0.002896300625985309*np.sign(I) + 0.008988174124499539*SOC - 0.0002442796046266317*(1/SOC) - 0.03600794119221361*np.log(SOC) + 0.07140289583237497*np.exp(0.05*np.sqrt(np.abs(I))),
+            'b1' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : 0.5980716373164474 - 0.014736520881731318*np.sign(I) - 0.013705950915958595*SOC + 0.0077557073940416575*(1/SOC) + 0.04259382776821052*np.log(SOC) - 0.6881498407470136*np.exp(0.05*np.sqrt(np.abs(I))),
+            'b2' : lambda SOC=DEFAULT_SOC,T=DEFAULT_T,I=DEFAULT_I : -0.49461251590396527 + 0.006828469741895115*np.sign(I) - 0.005603817279896843*(1/SOC) + 0.4605303567371089*np.exp(0.05*np.sqrt(np.abs(I)))
+            }
+            
+    return model
+
 def load_LPV1() -> dict:
 
     Sheikh2025_OCV = pd.read_csv(f'{current_dir}/battery_data/Sheikh2025_OCV.csv') # SOC, OCV, dOCVdT, reference temp
