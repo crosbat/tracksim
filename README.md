@@ -22,31 +22,38 @@ There are multiple examples available in the repository to get you started using
 
 Setting up the battery pack and the vehicle can be done using two lines of code:
 ```python
-from trackism.tracksim import Vehicle, Pack
+from tracksim.tracksim import Vehicle, Pack
 
 from tracksim.vehicle_models import ChevyVoltTuned # Modified version of the model in [1]
 from tracksim.pack_models import ChevyVoltPack # See [1]
-from tracksim.cell_models import Zheng2024Cell # See [2]
+from tracksim.cell_models import load_Zheng2024 # See [2]
 from tracksim.temperature_models import Zheng2024Temp # See [2]
 
+Zheng2024Cell = load_Zheng2024()
 pack = Pack(ChevyVoltPack, Zheng2024Cell, Zheng2024Temp)
-vehicle = Vehicle(ChevyvoltTuned, pack)
+vehicle = Vehicle(ChevyVoltTuned, pack)
 ```
 
 The vehicle and the battery pack can then be simulated using a given trip profile:
 ```python
 
-from tracksim.example_trips import Weinreich2025_E45_1
+from tracksim.example_trips import load_weinreich2025_E45_1
+
+trip_data = load_weinreich2025_E45_1()
 
 time = trip_data['Time [s]']
-time_delta = time[1] - time[0]
+sample_period = time[1] - time[0]
 speed = trip_data['Speed [m/s]']
 
-soc_init = 0.8
-
-vehicle.simulate_vehicle(time, speed, time_delta)
-pack.set_initial_conditions(soc=soc_init)
+vehicle.simulate_vehicle(time, speed, sample_period)
 vehicle.simulate_battery_pack()
+```
+
+Plotting the results can then be done using one line of code:
+```python
+from tracksim.utils import plot_vehicle_and_battery_data
+
+fig, ax = plot_vehicle_and_battery_data(vehicle)
 ```
 
 # Citing TRACKSIM
