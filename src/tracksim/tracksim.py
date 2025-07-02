@@ -28,7 +28,8 @@ class Traffic():
                  time_step: int | float = 1,
                  record_position: bool = False,
                  to_geo: bool = True,
-                 record_edge: bool = False, 
+                 record_edge: bool = False,
+                 sumo_options: dict | None = None,
                  pbar: bool = True,
                  checkpoint_dir: str = 'trip_checkpoints',
                  lite_mode_ratio: int | float | None = None,
@@ -63,6 +64,11 @@ class Traffic():
             Records the ID of the current edge in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        sumo_options : dict | None, optional
+            Additional options for configuring the SUMO simulation. The keys of
+            the dict should contain the name of the option and the values should
+            contain the setting of the option. Please refer to 
+            https://sumo.dlr.de/docs/sumo.html for a list of available options.
         pbar : bool, optional
             Displays a progress bar during the simulation if True. The default 
             is True.
@@ -104,6 +110,7 @@ class Traffic():
         self.record_position = record_position
         self.to_geo = to_geo
         self.record_edge = record_edge
+        self.sumo_options = sumo_options
         self.pbar = pbar
         self.lite_mode_ratio = lite_mode_ratio
         
@@ -296,7 +303,19 @@ class Traffic():
         data = dict() # Initialize simulation data storage
         
         # Initialize simulation
-        ls.start(["sumo", "-c", self.config_path, "--step-length", str(self.time_step)])
+        
+        if self.sumo_options is None:
+            start_cmd = ["sumo", "-c", self.config_path, "--step-length", str(self.time_step)]
+        elif isinstance(self.sumo_options, dict):
+            start_cmd = ["sumo", "-c", self.config_path, "--step-length", str(self.time_step)]
+            
+            for key in self.sumo_options.keys():
+                start_cmd.append(key)
+                start_cmd.append(str(self.sumo_options[key]))
+        else:
+            raise TypeError("Please provide 'sumo_options' as a dict.")
+        
+        ls.start(start_cmd)
         print(f'\nStarted simulation with timedelta: {ls.simulation.getDeltaT()}s')
         n_steps = np.floor(self.duration*3600*(1/self.time_step))
         
