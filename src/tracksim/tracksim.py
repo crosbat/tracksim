@@ -601,7 +601,8 @@ class Pack():
                       initial_soc : np.ndarray | int |float = 0.8,
                       initial_temp : np.ndarray | int |float = 25,
                       initial_rc_current : np.ndarray | int |float = 0,
-                      coolant_temp : np.ndarray | int |float | None = None):
+                      coolant_temp : np.ndarray | int |float | None = None,
+                      soc_cutoff : int | float = 0):
         """
         Simulates the battery pack with the given input power profile. The
         battery pack is assumed to be initially at rest.
@@ -630,7 +631,10 @@ class Pack():
             array or as a single number (same across all cells). If None, then
             no cooling is provided. Only used if the cell model is an 
             Equivalent Circuit Model. The default is None.
-
+        soc_cutoff : int | float, optional
+            Minimum SOC allowed for all cells. If the SOc af any cell is below
+            'soc_cutoff', then the simulation stops prematuraly. The default is 0.
+        
         Raises
         ------
         KeyError
@@ -653,6 +657,7 @@ class Pack():
                                     initial_soc, 
                                     initial_temp,
                                     coolant_temp,
+                                    soc_cutoff,
                                     sample_period)
             
         elif self.cell_model['Model type'] in ['LPV', 'ARX']:
@@ -665,6 +670,7 @@ class Pack():
             self._simulate_pack_LPV(desired_power, 
                                     initial_soc,
                                     initial_temp,
+                                    soc_cutoff,
                                     sample_period)
             
         else:
@@ -723,7 +729,33 @@ class Pack():
         self.initial_conditions[condition_name] = formatted_input
         
         return formatted_input
+    
+    def _truncate_simulation_data(self, reduced_sim_len):
+        """
+        Truncates the obtained simulation data in case the simulation gets cut
+        short.
 
+        Parameters
+        ----------
+        reduced_sim_len : int
+            Reduced length of simulation.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        for parent_key in self.simulation_results.keys():
+            if isinstance(self.simulation_results[parent_key], np.ndarray):
+                self.simulation_results[parent_key] = self.simulation_results[parent_key][:reduced_sim_len+1]
+            
+            elif isinstance(self.simulation_results[parent_key], dict):
+                for child_key in self.simulation_results[parent_key].keys():
+                    self.simulation_results[parent_key][child_key] = self.simulation_results[parent_key][child_key][:reduced_sim_len+1]
+        
+        return None
+    
     def _initialize_simulation_ECM(self, 
                                   sim_len : int, 
                                   sample_period : int | float, 
@@ -788,6 +820,7 @@ class Pack():
                            initial_soc : np.ndarray | int | float,
                            initial_temp : np.ndarray | int | float,
                            coolant_temp : np.ndarray | int | float,
+                           soc_cutoff : int | float,
                            sample_period : int | float) -> None:
         """
         Simulates the battery pack under the given battery power profile.
@@ -810,6 +843,9 @@ class Pack():
             Temperature of the coolant in Celsius, either as a Ns x Np numpy 
             array or as a single number (same across all cells). If None, then
             no cooling is provided.
+        soc_cutoff : int | float, optional
+            Minimum SOC allowed for all cells. If the SOc af any cell is below
+            'soc_cutoff', then the simulation stops prematuraly. The default is 0.
         sample_period : float
             Time between samples in seconds.
 
@@ -1060,6 +1096,13 @@ class Pack():
                         self.simulation_results[f'Cell {i}-{j}'][f'R{l+1} [Ohm]'][k] = r[l,i,j]
                         self.simulation_results[f'Cell {i}-{j}'][f'C{l+1} [F]'][k] = c[l,i,j]
             
+            if self.simulation_results['Pack']['Min SOC'][k] < soc_cutoff:
+                # If the SOC of any cell is below the cutoff, then end the 
+                # simulation and save the collected data
+                
+                self._truncate_simulation_data(k)
+                return None
+            
         return None
 
     def _initialize_simulation_LPV(self, 
@@ -1124,6 +1167,7 @@ class Pack():
                           desired_power : iter,
                           initial_soc : np.ndarray | int | float,
                           initial_temp : np.ndarray | int | float,
+                          soc_cutoff : int | float,
                           sample_period : int | float):
         """
         Simulates the battery pack under the given battery power profile.
@@ -1137,7 +1181,10 @@ class Pack():
             array or as a single number (same across all cells).
         inital_temp : np.ndarray | int | float
             Initial temperature of the cells in the pack in Celsius, either as 
-            a Ns x Np numpy array or as a single number (same across all cells). 
+            a Ns x Np numpy array or as a single number (same across all cells).
+        soc_cutoff : int | float, optional
+            Minimum SOC allowed for all cells. If the SOc af any cell is below
+            'soc_cutoff', then the simulation stops prematuraly. The default is 0.
         sample_period : int or float
             Time between samples in seconds.
 
@@ -1356,6 +1403,13 @@ class Pack():
                     for l in range(model_order):
                         self.simulation_results[f'Cell {i}-{j}'][f'a{l+1}'][k] = a[l,i,j]
                         self.simulation_results[f'Cell {i}-{j}'][f'b{l+1}'][k] = b[l,i,j]
+        
+            if self.simulation_results['Pack']['Min SOC'][k] < soc_cutoff:
+                # If the SOC of any cell is below the cutoff, then end the 
+                # simulation and save the collected data
+                
+                self._truncate_simulation_data(k)
+                return None
         
         return None
 
@@ -1590,11 +1644,20 @@ class Vehicle():
                 self.simulation_results['Battery power demand [W]'][i] += self.simulation_results['Limited power [W]'][i]*self.drivetrain_efficiency
         
         return None
-
+    
+    def _truncate_simulation_data(self, reduced_sim_len : int) -> None:
+        
+        for key in self.simulation_results.keys():
+            if isinstance(self.simulation_results[key], np.ndarray):
+                self.simulation_results[key] = self.simulation_results[key][:reduced_sim_len]
+        
+        return None
+    
     def simulate_battery_pack(self,
                               initial_soc : np.ndarray | float | int = 0.8,
                               initial_temp : np.ndarray | float | int = 25,
-                              initial_rc_current : np.ndarray | float | int = 0) -> None:
+                              initial_rc_current : np.ndarray | float | int = 0,
+                              soc_cutoff : int | float = 0) -> None:
         """
         Simulates the battery pack using the generated power demand from the 
         vehicle simulation.
@@ -1614,6 +1677,9 @@ class Vehicle():
             as a Ns x Np numpy array or as a single number (same across all 
             cells). Only used if the cell model is an Equivalent Circuit Model
             The default is 0 A (cells are at rest).
+        soc_cutoff : int | float, optional
+            Minimum SOC allowed for all cells. If the SOc af any cell is below
+            'soc_cutoff', then the simulation stops prematuraly. The default is 0.
 
         Returns
         -------
@@ -1626,12 +1692,19 @@ class Vehicle():
         
         self.pack.simulate_pack(self.simulation_results['Battery power demand [W]'], 
                                 self.simulation_results['Sample period [s]'],
-                                initial_soc,
-                                initial_temp,
-                                initial_rc_current)
+                                initial_soc=initial_soc,
+                                initial_temp=initial_temp,
+                                initial_rc_current=initial_rc_current,
+                                soc_cutoff=soc_cutoff)
+        
+        if len(self.simulation_results['Time [s]']) > len(self.pack.simulation_results['Time [s]']):
+            # If the battery pack simulations were cut short
+            
+            reduced_sim_len = len(self.pack.simulation_results['Time [s]'])
+            self._truncate_simulation_data(reduced_sim_len)
         
         return None
-    
+
 if __name__ == '__main__':
     pass
     
