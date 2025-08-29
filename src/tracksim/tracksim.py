@@ -29,6 +29,9 @@ class Traffic():
                  record_position: bool = False,
                  to_geo: bool = True,
                  record_edge: bool = False,
+                 record_lane: bool = False,
+                 record_speed_limit : bool = False,
+                 data_retrieval_functions : list = None,
                  sumo_options: dict | None = None,
                  pbar: bool = True,
                  checkpoint_dir: str = 'trip_checkpoints',
@@ -64,6 +67,31 @@ class Traffic():
             Records the ID of the current edge in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        record_lane : bool, optional
+            Records the ID of the current lane in the network of each vehicle 
+            in the simulation if True. Enabling this will increase file sizes. 
+            The default is False.
+        record_speed_limit : bool, optional
+            Records the maximum speed allowed for the current lane in the 
+            network of each vehicle in the simulation if True. Enabling this 
+            will increase file sizes. The default is False.
+        data_retrieval_functions : list, optional
+            Retrieves vehicle, edge or lane data based on the functions 
+            provided. For example, the list ['vehicle.getSpeed', 'lane.getLength']
+            will make it so the speed and length of the current lane for each
+            vehicle is recorded. The resulting values are stored in a column
+            with the same name as the function used. Tables of possible functions 
+            are provided in the URLs below:
+                
+            https://sumo.dlr.de/docs/TraCI/Vehicle_Value_Retrieval.html
+            https://sumo.dlr.de/docs/TraCI/Edge_Value_Retrieval.html
+            https://sumo.dlr.de/docs/TraCI/Lane_Value_Retrieval.html
+            
+            Functions related to the vehicle, edge or lane must be prefixed 
+            with either 'vehicle.', 'edge.', or 'lane.'. Functions which require
+            additional positional arguments, other than the ID of the vehicle,
+            edge or lane, are not supported.
+        
         sumo_options : dict | None, optional
             Additional options for configuring the SUMO simulation. The keys of
             the dict should contain the name of the option and the values should
@@ -110,6 +138,9 @@ class Traffic():
         self.record_position = record_position
         self.to_geo = to_geo
         self.record_edge = record_edge
+        self.record_lane = record_lane
+        self.record_speed_limit = record_speed_limit
+        self.data_retrieval_functions = data_retrieval_functions
         self.sumo_options = sumo_options
         self.pbar = pbar
         self.lite_mode_ratio = lite_mode_ratio
@@ -167,6 +198,18 @@ class Traffic():
             
             if self.record_edge:
                 data[veh_id]['Edge ID'] = [] # Network edge id
+            
+            if self.record_lane:
+                data[veh_id]['Lane ID'] = [] # Network lane id
+            
+            if self.record_speed_limit:
+                data[veh_id]['Speed limit [m/s]'] = [] # Network lane speed limit
+            
+            if isinstance(self.data_retrieval_functions, list):
+                
+                for function in self.data_retrieval_functions:
+                    data[veh_id][function] = []
+                
         
         data[veh_id]['Time [s]'].append(step*self.time_step)
         
@@ -185,6 +228,26 @@ class Traffic():
        
         if self.record_edge:
             data[veh_id]['Edge ID'].append(ls.vehicle.getRoadID(veh_id))
+        
+        if self.record_lane:
+            data[veh_id]['Lane ID'].append(ls.vehicle.getLaneID(veh_id))
+        
+        if self.record_speed_limit:
+            data[veh_id]['Speed limit [m/s]'].append(ls.lane.getMaxSpeed(ls.vehicle.getLaneID(veh_id)))
+        
+        if isinstance(self.data_retrieval_functions, list):
+            for function in self.data_retrieval_functions:
+                
+                if 'vehicle.' in function:
+                    value = eval('ls.' + function + '(veh_id)')
+                elif 'lane.' in function:
+                    value = eval('ls.' + function + '(ls.vehicle.getLaneID(veh_id))')
+                elif 'edge.' in function:
+                    value = eval('ls.' + function + '(ls.vehicle.getEdgeID(veh_id))')
+                else:
+                    raise ValueError('This function is currently not supported.')
+                    
+                data[veh_id][function].append(value)
         
         return None
 
