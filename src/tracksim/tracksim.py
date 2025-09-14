@@ -34,6 +34,7 @@ class Traffic():
                  data_retrieval_functions : list = None,
                  sumo_options: dict | None = None,
                  pbar: bool = True,
+                 checkpoint_len : int | None = 3600,
                  checkpoint_dir: str = 'trip_checkpoints',
                  lite_mode_ratio: int | float | None = None,
                  random_state: int | str | None = None,
@@ -46,35 +47,44 @@ class Traffic():
         config_path : str
             The path to the SUMO configuration file for the scenario to be 
             simulated.
+        
         output_dir : str, optional
             Directory to store the final simulated trip files. By default, the
             trip files are stored in a directory named 'simulated_trip_files'.
+        
         duration : int, optional
             Duration of simulation in hours. The default is 1 hour.
+        
         time_step : int | float, optional
             Length of time between samples in the simulation in seconds. The
             default is 1 second between each sample. The minimum value of
             'time_step' is 0.1 seconds.
+        
         record_position : bool, optional
             Records the x and y position in the network of each vehicle in the 
             simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        
         to_geo : bool, optional
             Converts the position of the vehicle into geograpic coordinates 
             (longitude, latitude) if True. Only used if record_position is True.
             The default is True.
+        
         record_edge : bool, optional
             Records the ID of the current edge in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        
         record_lane : bool, optional
             Records the ID of the current lane in the network of each vehicle 
             in the simulation if True. Enabling this will increase file sizes. 
             The default is False.
+        
         record_speed_limit : bool, optional
             Records the maximum speed allowed for the current lane in the 
             network of each vehicle in the simulation if True. Enabling this 
             will increase file sizes. The default is False.
+        
         data_retrieval_functions : list, optional
             Retrieves vehicle, edge or lane data based on the functions 
             provided. For example, the list ['vehicle.getSpeed', 'lane.getLength']
@@ -97,9 +107,24 @@ class Traffic():
             the dict should contain the name of the option and the values should
             contain the setting of the option. Please refer to 
             https://sumo.dlr.de/docs/sumo.html for a list of available options.
+        
         pbar : bool, optional
             Displays a progress bar during the simulation if True. The default 
             is True.
+        
+        checkpoint_len : int | None, optional
+            Length of each checkpoint to be saved during the simulation. For
+            example, if 'checkpoint_len' is one hour, then every hour in
+            simulation time the data of all the vehicles during that timeframe
+            are saved to disk. The checkpoints are then later processed to
+            generate the full trips. The lenght of the checkpoint affects the
+            amount of data used in memory. If checkpoint_len is None, then no
+            checkpoints are saved and the vehicle data for the entire duration
+            of the simulation is saved to 'output_dir'. The default is 3600s.
+        
+        checkpoint_dir : str, optional
+            Directory to store the intermediate checkpoint data.
+        
         lite_mode_ratio : int | float | None, optional
             Can be set as a number between 0 and 1 which gives the ratio of trips 
             to process in the 'process_checkpoints' method. If 'lite_mode_ratio' 
@@ -109,6 +134,7 @@ class Traffic():
             the user by calling the 'process_checkpoints' method. NOTE: all trips 
             still need to be simulated, this variable only affects the processing
             of the simulated trips after simulation. The default is None.
+        
         random_state : int | str | None, optional
             Sets the seed for the randomizer used to shuffle the order of the 
             trips to process in 'process_checkpoints'. If None, then the 
@@ -116,6 +142,7 @@ class Traffic():
             the order to process the trips is not randomized. Note: if 
             random_state is 'off', then it will switch to None if lite_mode_ratio 
             is not None. The default is None.
+        
         remove_checkpoints_when_finished : bool, optional
             Removes the intermediate checkpoints generated after simulation
             and before the final processing if True. These files are mainly 
@@ -143,6 +170,7 @@ class Traffic():
         self.data_retrieval_functions = data_retrieval_functions
         self.sumo_options = sumo_options
         self.pbar = pbar
+        self.checkpoint_len = checkpoint_len
         self.lite_mode_ratio = lite_mode_ratio
         
         if self.lite_mode_ratio == 1:
@@ -172,8 +200,10 @@ class Traffic():
         ----------
         veh_id : str
             ID of the vehicle.
+        
         data : dict
             Latest data of the vehicle.
+        
         step : int
             Current time step.
 
@@ -357,7 +387,8 @@ class Traffic():
     
         """
         
-        make_clean_dir(self.checkpoint_dir)
+        if self.checkpoint_len:
+            make_clean_dir(self.checkpoint_dir)
         
         print('\nStarting simulation')
         
@@ -385,56 +416,100 @@ class Traffic():
         if self.pbar:
             pbar = tqdm(total=n_steps, position=0, leave=True) # Define progress bar
         
-        # Run simulation
-        step=0
-        while step < n_steps:
-            
-            ls.simulationStep()
-            veh_list = ls.vehicle.getIDList() # Get vehicles on the road
-            # veh_list = ['veh' + veh_id if 'veh' not in veh_id else veh_id for veh_id in veh_list] # Sometimes the 'veh' indicator is omitted (eg. in the Berlin scenario) and needs to be put back in
-            
-            try:
-                for veh_id in veh_list:
-                    self._update_vehicle_data(veh_id, data, step)
-            except IndexError:
-                pass
-            
-            step += 1
-            
-            if step > 0 and step%(3600/self.time_step)==0:
-                # For every 1 hour
+        if self.checkpoint_len:
+            # With checkpoints
+        
+            step=0
+            while step < n_steps:
                 
-                timeslot_index = int(step/(3600/self.time_step))
+                ls.simulationStep()
+                veh_list = ls.vehicle.getIDList() # Get vehicles on the road
+                # veh_list = ['veh' + veh_id if 'veh' not in veh_id else veh_id for veh_id in veh_list] # Sometimes the 'veh' indicator is omitted (eg. in the Berlin scenario) and needs to be put back in
                 
-                for veh_id in data.keys():
-                    # Save the trip data for this vehicle in this timeslot
+                try:
+                    for veh_id in veh_list:
+                        self._update_vehicle_data(veh_id, data, step)
+                except IndexError:
+                    pass
+                
+                step += 1
+                
+                if step > 0 and step%(self.checkpoint_len/self.time_step)==0:
+                    # For every 1 hour
                     
-                    with open(f'{self.checkpoint_dir}/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
-                        pickle.dump(data[veh_id], file)
+                    timeslot_index = int(step/(self.checkpoint_len/self.time_step))
+                    
+                    for veh_id in data.keys():
+                        # Save the trip data for this vehicle in this timeslot
+                        
+                        with open(f'{self.checkpoint_dir}/{veh_id}_{timeslot_index}.pickle', 'wb') as file:
+                            pickle.dump(data[veh_id], file)
+                    
+                    data = dict() # Reset data storage
                 
-                data = dict() # Reset data storage
+                if self.pbar:
+                    pbar.update()
+            
+            ls.close()
             
             if self.pbar:
-                pbar.update()
+                pbar.close()
+            
+            print(f'\n Finished simulation in {time.time()-time_start:.2f} seconds!')
+            
+            make_clean_dir(self.output_dir)
+            
+            if self.lite_mode_ratio != 0:
+                # If 'lite_mode_ratio' is zero, then do not process any trips
         
-        ls.close()
+                self._process_checkpoints()
+            
+                if self.remove_checkpoints_when_finished:
+                    
+                    print(f"\nRemoving '{self.checkpoint_dir}'")
+                    shutil.rmtree(f'{self.checkpoint_dir}')
         
-        if self.pbar:
-            pbar.close()
-        
-        print(f'\n Finished simulation in {time.time()-time_start:.2f} seconds!')
-        
-        make_clean_dir(self.output_dir)
-        
-        if self.lite_mode_ratio != 0:
-            # If 'lite_mode_ratio' is zero, then do not process any trips
-    
-            self._process_checkpoints()
-        
-            if self.remove_checkpoints_when_finished:
+        else:
+            # Without checkpoints
+            
+            step=0
+            while step < n_steps:
                 
-                print(f"\nRemoving '{self.checkpoint_dir}'")
-                shutil.rmtree(f'{self.checkpoint_dir}')
+                ls.simulationStep()
+                veh_list = ls.vehicle.getIDList() # Get vehicles on the road
+                # veh_list = ['veh' + veh_id if 'veh' not in veh_id else veh_id for veh_id in veh_list] # Sometimes the 'veh' indicator is omitted (eg. in the Berlin scenario) and needs to be put back in
+                
+                try:
+                    for veh_id in veh_list:
+                        self._update_vehicle_data(veh_id, data, step)
+                except IndexError:
+                    pass
+                
+                step += 1
+                
+                if self.pbar:
+                    pbar.update()
+            
+            ls.close()
+            
+            if self.pbar:
+                pbar.close()
+            
+            print(f'\n Finished simulation in {time.time()-time_start:.2f} seconds!')
+            
+            make_clean_dir(self.output_dir)
+            
+            # Save all vehicle data
+            
+            for veh_id, veh_dict in data.items():
+                
+                for key in veh_dict.keys():
+                    # Make all lists to arrays for easier processing
+                    veh_dict[key] = np.array(veh_dict[key])
+                    
+                veh_df = pd.DataFrame(veh_dict)
+                
+                veh_df.to_csv(f'{self.output_dir}/{veh_id}.csv', index=False)
             
         return None
     
@@ -459,6 +534,7 @@ class Pack():
         pack_model : dict
             Dictionary describing the battery pack. The dictionary has to
             follow the same format as those in tracksim.pack_models.
+        
         cell_model : dict | np.ndarray
             Dict or array of dicts describing the model of the cells in the 
             battery pack. The format of the dict has to follow those in
@@ -466,6 +542,7 @@ class Pack():
             assumed to follow the same model. If an array of dicts is given,
             then each each cell is assumed to have a distinct model. WARNING:
             having different cells will significantly increase computation time.
+        
         temperature_model : dict | np.ndarray | None, optional
             Dict or array of dicts describing the temperature model of the cells 
             in the battery pack. The format of the dict has to follow those in
@@ -479,6 +556,7 @@ class Pack():
         ValueError
             Raised if cell_model or temperature_model are not of the correct
             type.
+        
         KeyError
             Raised if the 'Model type' value is not supported.
 
@@ -674,26 +752,32 @@ class Pack():
         ----------
         desired_power : iter
             Input power profile in Watts.
+        
         sample_period : int | float
             Time between samples in seconds.
+        
         initial_soc : np.ndarray | int | float, optional
             Initial SOC of the cells in the pack, either as a Ns x Np numpy 
             array or as a single number (same across all cells). The default 
             is 0.8.
+        
         inital_temp : np.ndarray | int | float, optional
             Initial temperature of the cells in the pack in Celsius, either as 
             a Ns x Np numpy array or as a single number (same across all cells). 
             The default is 25 C.
+        
         initial_rc_current : np.ndarray | int | float, optional
             Initial diffusion current of the cells in the pack in Ampere, either 
             as a Ns x Np numpy array or as a single number (same across all 
             cells). Only used if the cell model is an Equivalent Circuit Model.
             The default is 0 A (cells are at rest).
+        
         coolant_temp : np.ndarray | int |float | None, optional
             Temperature of the coolant in Celsius, either as a Ns x Np numpy 
             array or as a single number (same across all cells). If None, then
             no cooling is provided. Only used if the cell model is an 
             Equivalent Circuit Model. The default is None.
+        
         soc_cutoff : int | float, optional
             Minimum SOC allowed for all cells. If the SOc af any cell is below
             'soc_cutoff', then the simulation stops prematuraly. The default is 0.
@@ -752,9 +836,11 @@ class Pack():
         ----------
         input_ : np.ndarray | int | float
             Initial condition provided by the user.
+        
         condition_name : str
             Name of the initial condition to be stored as a key in the 
             dictionary.
+        
         variable_name : str
             Name of the variable storing the condition. Only used for printing
             purposes.
@@ -831,8 +917,10 @@ class Pack():
         ----------
         sim_len : int
             Length of simulation in samples.
+        
         sample_period : float
             Time between samples in seconds.
+        
         num_rc_pairs : int
             Number of RC pairs in the ECM. Must be at least 1.
 
@@ -892,23 +980,29 @@ class Pack():
         ----------
         desired_power : iterable
             Profile of the demanded power in Watts.
+        
         initial_soc : np.ndarray | int | float
             Initial SOC of the cells in the pack, either as a Ns x Np numpy 
             array or as a single number (same across all cells).
+        
         inital_temp : np.ndarray | int | float
             Initial temperature of the cells in the pack in Celsius, either as 
             a Ns x Np numpy array or as a single number (same across all cells).
+        
         initial_rc_current : np.ndarray | int | float
             Initial diffusion current of the cells in the pack in Ampere, either 
             as a Ns x Np numpy array or as a single number (same across all 
             cells).
+        
         coolant_temp : np.ndarray | int |float | None
             Temperature of the coolant in Celsius, either as a Ns x Np numpy 
             array or as a single number (same across all cells). If None, then
             no cooling is provided.
+        
         soc_cutoff : int | float, optional
             Minimum SOC allowed for all cells. If the SOc af any cell is below
             'soc_cutoff', then the simulation stops prematuraly. The default is 0.
+        
         sample_period : float
             Time between samples in seconds.
 
@@ -1180,8 +1274,10 @@ class Pack():
         ----------
         sim_len : int
             Length of simulation in samples.
+        
         sample_period : int | float
             Time between samples in seconds.
+        
         model_order : int
             Order of the LPV model.
 
@@ -1239,15 +1335,19 @@ class Pack():
         ----------
         desired_power : iterable
             Profile of the demanded power in Watts.
+       
         initial_soc : np.ndarray | int | float
             Initial SOC of the cells in the pack, either as a Ns x Np numpy 
             array or as a single number (same across all cells).
+        
         inital_temp : np.ndarray | int | float
             Initial temperature of the cells in the pack in Celsius, either as 
             a Ns x Np numpy array or as a single number (same across all cells).
+        
         soc_cutoff : int | float, optional
             Minimum SOC allowed for all cells. If the SOc af any cell is below
             'soc_cutoff', then the simulation stops prematuraly. The default is 0.
+        
         sample_period : int or float
             Time between samples in seconds.
 
@@ -1490,7 +1590,7 @@ class Vehicle():
         vehicle_model : dict
             Dictionary describing the vehicle. The dictionary has to
             follow the same format as those in tracksim.vehicle_models.
-            .
+        
         pack : Pack
             Instance of the Pack class.
 
@@ -1531,8 +1631,10 @@ class Vehicle():
         ----------
         time : iterable
             Contains the time data for the trip of the vehicle.
+        
         speed_desired : iterable
             Contains the speed data for the trip of the vehicle.
+        
         sample_period : int | float
             Time between samples in seconds.
 
@@ -1577,6 +1679,7 @@ class Vehicle():
         ----------
         speed : float, optional
             Initial speed of the vehicle in m/s. The default is 0 m/s.
+        
         motor_speed : float, optional
             Initial motor speed of the vehicle in RPM. The default is 0 RPM.
 
@@ -1603,8 +1706,10 @@ class Vehicle():
         ----------
         time : iterable
             Contains the time data for the trip of the vehicle.
+        
         speed_desired : iterable
             Contains the speed data for the trip of the vehicle.
+        
         sample_period : int | float
             Time between samples in seconds.
 
@@ -1731,15 +1836,18 @@ class Vehicle():
             Initial SOC of the cells in the pack, either as a Ns x Np numpy 
             array or as a single number (same across all cells). The default 
             is 0.8.
+        
         initial_temp : np.array | float | int, optional
             Initial temperature of the cells in the pack in Celsius, either as 
             a Ns x Np numpy array or as a single number (same across all cells). 
             The default is 25 C.
+        
         initial_rc_current : np.array | float | int, optional
             Initial diffusion current of the cells in the pack in Ampere, either 
             as a Ns x Np numpy array or as a single number (same across all 
             cells). Only used if the cell model is an Equivalent Circuit Model
             The default is 0 A (cells are at rest).
+        
         soc_cutoff : int | float, optional
             Minimum SOC allowed for all cells. If the SOc af any cell is below
             'soc_cutoff', then the simulation stops prematuraly. The default is 0.
