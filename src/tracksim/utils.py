@@ -31,14 +31,14 @@ def make_clean_dir(path: str) -> None:
     None.
 
     """
-    if path not in os.listdir():
+    if not os.path.exists(path):
         print(f"\nMaking '{path}'")
-        os.mkdir(path)
+        os.makedirs(path)
 
     else:
         print(f"\nPurging '{path}'")
         shutil.rmtree(path)
-        os.mkdir(path)
+        os.makedirs(path)
     
     return None
 
