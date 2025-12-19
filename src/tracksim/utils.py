@@ -489,31 +489,37 @@ def convert_pybatteryid_model_to_tracksim(pybid_model_path : str) -> dict:
     for arx_coeff, terms, coeffs in zip(arx_coeffs, arx_terms, term_coeffs):
         
         lambda_string = 'lambda SOC=0.5, T=25, I=0 : '
-    
-        for term, coeff in zip(terms, coeffs):
-            
-            lambda_string = lambda_string + str(coeff)
-            
-            if '×' in term:
-                
-                term_parts = term.split('×')[1:]
-                
-                for term_part in term_parts:
         
-                    variable = term_part.split('(')[0]
+        if len(terms) == 0:
+            lambda_string = lambda_string + '0'
+        
+        else:
+        
+            for term, coeff in zip(terms, coeffs):
+                
+                lambda_string = lambda_string + str(coeff)
+                
+                if '×' in term:
                     
-                    if 'exp' in variable:
-                        lambda_string = lambda_string + '*' + translate_exp_term(variable)
+                    term_parts = term.split('×')[1:]
                     
-                    else:
-                        try:
-                            lambda_string = lambda_string + '*' + basis_function_dict[variable]
-                        except KeyError:
-                            raise KeyError(f'The term {variable} is currently not supported. Please use a model consisting only of the following supported basis functions: {supported_basis_functions}')                        
-                        
-            lambda_string = lambda_string + ' + ' # Add '+' sign for future terms
+                    for term_part in term_parts:
             
-        lambda_string = lambda_string[:-3] # Remove the last '+' sign since we are finished
+                        variable = term_part.split('(')[0]
+                        
+                        if 'exp' in variable:
+                            lambda_string = lambda_string + '*' + translate_exp_term(variable)
+                        
+                        else:
+                            try:
+                                lambda_string = lambda_string + '*' + basis_function_dict[variable]
+                            except KeyError:
+                                raise KeyError(f'The term {variable} is currently not supported. Please use a model consisting only of the following supported basis functions: {supported_basis_functions}')                        
+                            
+                lambda_string = lambda_string + ' + ' # Add '+' sign for future terms
+                
+            lambda_string = lambda_string[:-3] # Remove the last '+' sign since we are finished
+        
         # print(lambda_string)
         tracksim_model[arx_coeff] = eval(lambda_string) # Convert the lambda string to a callable and add it to the model dict
     
