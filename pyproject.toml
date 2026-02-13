@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pytracksim"
-version = "1.3.1"
+version = "1.3.2"
 authors = [
   { name="Nicolai Weinreich", email="nawe@energy.aau.dk" },
 ]
@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-"libsumo >= 1.20",
+"libsumo = 1.23",
 "pandas",
 "numpy",
 "scipy",
