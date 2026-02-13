@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-"libsumo = 1.23",
+"libsumo <= 1.23",
 "pandas",
 "numpy",
 "scipy",
