@@ -37,9 +37,9 @@ vehicle = Vehicle(ChevyVoltTuned, pack)
 The vehicle and the battery pack can then be simulated using a given trip profile:
 ```python
 
-from tracksim.example_trips import load_weinreich2025_E45_1
+from tracksim.example_trips import load_udds
 
-trip_data = load_weinreich2025_E45_1()
+trip_data = load_udds()
 
 time = trip_data['Time [s]']
 sample_period = time[1] - time[0]
@@ -79,3 +79,4 @@ You can also use the BibTex:
 [1] G. L. Plett, Battery Management Systems, Volume 2: Equivalent Circuit Methods. in Artech House Power engineering series. Boston: Artech house, 2016.
 
 [2] Y. Zheng, Y. Che, X. Hu, X. Sui, and R. Teodorescu, “Online Sensorless Temperature Estimation of Lithium-Ion Batteries Through Electro-Thermal Coupling,” IEEE/ASME Trans. Mechatron., vol. 29, no. 6, pp. 4156–4167, Dec. 2024, doi: 10.1109/TMECH.2024.3367291.
+
