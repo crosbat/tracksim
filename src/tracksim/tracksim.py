@@ -742,7 +742,7 @@ class Pack():
                       initial_soc : np.ndarray | int |float = 0.8,
                       initial_temp : np.ndarray | int |float = 25,
                       initial_rc_current : np.ndarray | int |float = 0,
-                      coolant_temp : np.ndarray | int |float | None = None,
+                      cooling_temp : np.ndarray | int |float | None = None,
                       soc_cutoff : int | float = 0):
         """
         Simulates the battery pack with the given input power profile. The
@@ -772,8 +772,8 @@ class Pack():
             cells). Only used if the cell model is an Equivalent Circuit Model.
             The default is 0 A (cells are at rest).
         
-        coolant_temp : np.ndarray | int |float | None, optional
-            Temperature of the coolant in Celsius, either as a Ns x Np numpy 
+        cooling_temp : np.ndarray | int |float | None, optional
+            Cooling temperature in Celsius, either as a Ns x Np numpy 
             array or as a single number (same across all cells). If None, then
             no cooling is provided. Only used if the cell model is an 
             Equivalent Circuit Model. The default is None.
@@ -798,12 +798,12 @@ class Pack():
                                                                     initial_soc, 
                                                                     initial_temp, 
                                                                     initial_rc_current, 
-                                                                    coolant_temp)
+                                                                    cooling_temp)
             
             self._simulate_pack_ECM(desired_power, 
                                     initial_soc, 
                                     initial_temp,
-                                    coolant_temp,
+                                    cooling_temp,
                                     soc_cutoff,
                                     sample_period)
             
@@ -812,7 +812,7 @@ class Pack():
                                                                     initial_soc, 
                                                                     initial_temp, 
                                                                     initial_rc_current=0, 
-                                                                    coolant_temp=0)
+                                                                    cooling_temp=0)
             
             self._simulate_pack_LPV(desired_power, 
                                     initial_soc,
@@ -970,7 +970,7 @@ class Pack():
                            desired_power : iter, 
                            initial_soc : np.ndarray | int | float,
                            initial_temp : np.ndarray | int | float,
-                           coolant_temp : np.ndarray | int | float,
+                           cooling_temp : np.ndarray | int | float,
                            soc_cutoff : int | float,
                            sample_period : int | float) -> None:
         """
@@ -994,7 +994,7 @@ class Pack():
             as a Ns x Np numpy array or as a single number (same across all 
             cells).
         
-        coolant_temp : np.ndarray | int |float | None
+        cooling_temp : np.ndarray | int |float | None
             Temperature of the coolant in Celsius, either as a Ns x Np numpy 
             array or as a single number (same across all cells). If None, then
             no cooling is provided.
@@ -1034,8 +1034,8 @@ class Pack():
         T = self._format_initial_condition(initial_temp, 'Cell temperature [C]', 'initial_temp')
         irc = np.zeros(shape=(num_rc_pairs, Ns, Np))
         
-        if not coolant_temp is None:
-            Tf = self._format_initial_condition(coolant_temp, 'Coolant temperature [C]', 'coolant_temp')
+        if not cooling_temp is None:
+            Tf = self._format_initial_condition(cooling_temp, 'Cooling temperature [C]', 'cooling_temp')
         else:
             Tf = None
         
@@ -1825,6 +1825,7 @@ class Vehicle():
                               initial_soc : np.ndarray | float | int = 0.8,
                               initial_temp : np.ndarray | float | int = 25,
                               initial_rc_current : np.ndarray | float | int = 0,
+                              cooling_temp : np.ndarray | int |float | None = None,
                               soc_cutoff : int | float = 0) -> None:
         """
         Simulates the battery pack using the generated power demand from the 
@@ -1848,6 +1849,12 @@ class Vehicle():
             cells). Only used if the cell model is an Equivalent Circuit Model
             The default is 0 A (cells are at rest).
         
+        cooling_temp : np.ndarray | int |float | None, optional
+            Cooling temperature in Celsius, either as a Ns x Np numpy 
+            array or as a single number (same across all cells). If None, then
+            no cooling is provided. Only used if the cell model is an 
+            Equivalent Circuit Model. The default is None.
+        
         soc_cutoff : int | float, optional
             Minimum SOC allowed for all cells. If the SOc af any cell is below
             'soc_cutoff', then the simulation stops prematuraly. The default is 0.
@@ -1866,6 +1873,7 @@ class Vehicle():
                                 initial_soc=initial_soc,
                                 initial_temp=initial_temp,
                                 initial_rc_current=initial_rc_current,
+                                cooling_temp=cooling_temp,
                                 soc_cutoff=soc_cutoff)
         
         if len(self.simulation_results['Time [s]']) > len(self.pack.simulation_results['Time [s]']):
