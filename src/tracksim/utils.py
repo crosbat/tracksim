@@ -298,7 +298,7 @@ def check_if_cells_are_identical(cell_model : np.ndarray | dict,
                                  initial_soc : np.ndarray | float | int,
                                  initial_temp : np.ndarray | float | int,
                                  initial_rc_current : np.ndarray | float | int,
-                                 coolant_temp : np.ndarray | float | int) -> bool:
+                                 cooling_temp : np.ndarray | float | int) -> bool:
     """
     Checks if the cells in the battery pack are identical in terms of the
     cell models and their initial conditions.
@@ -320,7 +320,7 @@ def check_if_cells_are_identical(cell_model : np.ndarray | dict,
         as a Ns x Np numpy array or as a single number (same across all 
         cells). Only used if the cell model is an Equivalent Circuit Model.
         The default is 0 A (cells are at rest).
-    coolant_temp : np.ndarray | int |float | None, optional
+    cooling_temp : np.ndarray | int |float | None, optional
         Temperature of the coolant in Celsius, either as a Ns x Np numpy 
         array or as a single number (same across all cells). If None, then
         no cooling is provided. Only used if the cell model is an 
@@ -336,13 +336,13 @@ def check_if_cells_are_identical(cell_model : np.ndarray | dict,
     initial_socs_are_identical = False
     initial_temps_are_identical = False
     initial_ircs_are_identical = False
-    coolant_temps_are_identical = False
+    cooling_temps_are_identical = False
     
     cell_model_is_array = isinstance(cell_model, np.ndarray)
     soc_is_array = isinstance(initial_soc, np.ndarray)
     temp_is_array = isinstance(initial_temp, np.ndarray)
     irc_is_array = isinstance(initial_rc_current, np.ndarray)
-    coolant_temp_is_array = isinstance(coolant_temp, np.ndarray)
+    cooling_temp_is_array = isinstance(cooling_temp, np.ndarray)
     
     if not soc_is_array:
         initial_socs_are_identical = True
@@ -359,15 +359,15 @@ def check_if_cells_are_identical(cell_model : np.ndarray | dict,
     else:
         initial_ircs_are_identical = np.allclose(initial_rc_current, initial_rc_current[0,0])
     
-    if not coolant_temp_is_array:
-        coolant_temps_are_identical = True
+    if not cooling_temp_is_array:
+        cooling_temps_are_identical = True
     else:
-        coolant_temps_are_identical = np.allclose(coolant_temp, coolant_temp[0,0])
+        cooling_temps_are_identical = np.allclose(cooling_temp, cooling_temp[0,0])
     
     if cell_model_is_array:
         warnings.warn('When passing an array of cell models, it is assumed they will be treated as not identical during simulation. This will increase time and storage complexity in the simulation. If the cell models are meant to be identical, then please pass the cell model as a single dictionary.')
     
-    return (not cell_model_is_array) & initial_socs_are_identical & initial_temps_are_identical & initial_ircs_are_identical & coolant_temps_are_identical
+    return (not cell_model_is_array) & initial_socs_are_identical & initial_temps_are_identical & initial_ircs_are_identical & cooling_temps_are_identical
 
 # =============================================================================
 # Other useful functions
